@@ -139,6 +139,9 @@ enum xprtsec_policies {
 	RPC_XPRTSEC_NONE = 0,
 	RPC_XPRTSEC_TLS_ANON,
 	RPC_XPRTSEC_TLS_X509,
+
+	/* NOISE transport security policy*/
+	RPC_XPRTSEC_NOISE,
 };
 
 struct xprtsec_parms {
@@ -207,6 +210,8 @@ enum xprt_transports {
 	XPRT_TRANSPORT_BC_RDMA	= XPRT_TRANSPORT_RDMA | XPRT_TRANSPORT_BC,
 	XPRT_TRANSPORT_LOCAL	= 257,
 	XPRT_TRANSPORT_TCP_TLS	= 258,
+	/* NOISE ident */
+	XPRT_TRANSPORT_TCP_NOISE = 259,
 };
 
 struct rpc_sysfs_xprt;

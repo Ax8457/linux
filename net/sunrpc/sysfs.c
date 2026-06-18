@@ -189,6 +189,8 @@ static const char *xprtsec_strings[] = {
 	[RPC_XPRTSEC_NONE] = "none",
 	[RPC_XPRTSEC_TLS_ANON] = "tls-anon",
 	[RPC_XPRTSEC_TLS_X509] = "tls-x509",
+	/* NOISE */
+	[RPC_XPRTSEC_NOISE] = "noise",
 };
 
 static ssize_t rpc_sysfs_xprt_xprtsec_show(struct kobject *kobj,

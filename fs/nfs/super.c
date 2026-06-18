@@ -506,6 +506,11 @@ static void nfs_show_mount_options(struct seq_file *m, struct nfs_server *nfss,
 	case RPC_XPRTSEC_TLS_X509:
 		seq_puts(m, ",xprtsec=mtls");
 		break;
+	/* NOISE */
+	case RPC_XPRTSEC_NOISE:
+		seq_puts(m, ",xprtsec=noise");
+		break;
+
 	default:
 		break;
 	}

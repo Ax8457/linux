@@ -302,6 +302,8 @@ enum {
 	Opt_xprtsec_none,
 	Opt_xprtsec_tls,
 	Opt_xprtsec_mtls,
+	/* NOISE*/
+	Opt_xprtsec_noise,
 	nr__Opt_xprtsec
 };
 
@@ -309,6 +311,8 @@ static const struct constant_table nfs_xprtsec_policies[] = {
 	{ "none",	Opt_xprtsec_none },
 	{ "tls",	Opt_xprtsec_tls },
 	{ "mtls",	Opt_xprtsec_mtls },
+	/* NOISE xprtsec policy*/
+	{ "noise", Opt_xprtsec_noise },
 	{}
 };
 
@@ -375,7 +379,11 @@ static int nfs_validate_transport_protocol(struct fs_context *fc,
 	if (ctx->xprtsec.policy != RPC_XPRTSEC_NONE)
 		switch (ctx->nfs_server.protocol) {
 		case XPRT_TRANSPORT_TCP:
-			ctx->nfs_server.protocol = XPRT_TRANSPORT_TCP_TLS;
+			/* NOISE: route noise policy to its own transport */
+			if (ctx->xprtsec.policy == RPC_XPRTSEC_NOISE)
+				ctx->nfs_server.protocol = XPRT_TRANSPORT_TCP_NOISE;
+			else
+				ctx->nfs_server.protocol = XPRT_TRANSPORT_TCP_TLS;
 			break;
 		default:
 			goto out_invalid_xprtsec_policy;
@@ -510,6 +518,11 @@ static int nfs_parse_xprtsec_policy(struct fs_context *fc,
 	case Opt_xprtsec_mtls:
 		ctx->xprtsec.policy = RPC_XPRTSEC_TLS_X509;
 		break;
+	/* NOISE policy opt*/
+	case Opt_xprtsec_noise:
+		ctx->xprtsec.policy = RPC_XPRTSEC_NOISE;
+		break;
+
 	default:
 		return nfs_invalf(fc, "NFS: Unrecognized transport security policy");
 	}

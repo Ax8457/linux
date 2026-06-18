@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# Noise IKpsk2 cryptographic framework configuration
+#
+config NOISE_IKPSK2
+	tristate "Noise IKpsk2 cryptographic framework"
+	depends on CRYPTO
+	select CRYPTO_CURVE25519
+	select CRYPTO_LIB_CHACHA20POLY1305
+	select CRYPTO_LIB_BLAKE2S
+	default n
+	help
+	  Kernel-internal Noise IKpsk2 handshake and transport
+	  encryption framework using Curve25519, ChaChaPoly, and BLAKE2s.
+
+	  Provides handshake and symmetric encrypt/decrypt
+	  symbols for use by other kernel subsystems.
+
+	  If unsure, say N.

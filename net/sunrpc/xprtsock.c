@@ -102,6 +102,8 @@ static struct xprt_class xs_udp_transport;
 static struct xprt_class xs_tcp_transport;
 static struct xprt_class xs_tcp_tls_transport;
 static struct xprt_class xs_bc_tcp_transport;
+/* NOISE transport */
+static struct xprt_class xs_tcp_noise_transport;
 
 /*
  * FIXME: changing the UDP slot table size should also resize the UDP
@@ -195,6 +197,11 @@ static struct ctl_table xs_tunables_table[] = {
  * TLS handshake timeout.
  */
 #define XS_TLS_HANDSHAKE_TO	(10U * HZ)
+
+/*
+ * Noise handshake timeout.
+ */
+#define XS_NOISE_HANDSHAKE_TO	(10U * HZ)
 
 #if IS_ENABLED(CONFIG_SUNRPC_DEBUG)
 # undef  RPC_DEBUG_DATA
@@ -384,6 +391,8 @@ xs_sock_process_cmsg(struct socket *sock, struct msghdr *msg,
 	}
 	return ret;
 }
+
+
 
 static int
 xs_sock_recv_cmsg(struct socket *sock, unsigned int *msg_flags, int flags)
@@ -1219,6 +1228,7 @@ static void xs_sock_reset_state_flags(struct rpc_xprt *xprt)
 	clear_bit(XPRT_SOCK_WAKE_DISCONNECT, &transport->sock_state);
 	clear_bit(XPRT_SOCK_NOSPACE, &transport->sock_state);
 	clear_bit(XPRT_SOCK_UPD_TIMEOUT, &transport->sock_state);
+
 }
 
 static void xs_run_error_worker(struct sock_xprt *transport, unsigned int nr)
@@ -1603,6 +1613,77 @@ static void xs_tcp_state_change(struct sock *sk)
 			xprt_clear_connecting(xprt);
 		}
 		clear_bit(XPRT_CLOSING, &xprt->state);
+		/* Trigger the socket release */
+		xs_run_error_worker(transport, XPRT_SOCK_WAKE_DISCONNECT);
+	}
+}
+
+/**
+ * xs_tcp_noise_state_change - callback to handle TCP socket state changes
+ * @sk: socket whose state has changed
+ *
+ */
+static void xs_tcp_noise_state_change(struct sock *sk)
+{
+	struct rpc_xprt *xprt;
+	struct sock_xprt *transport;
+
+	if (!(xprt = xprt_from_sock(sk)))
+		return;
+	dprintk("RPC:       xs_tcp_noise_state_change client %p...\n", xprt);
+	dprintk("RPC:       state %x conn %d dead %d zapped %d sk_shutdown %d\n",
+			sk->sk_state, xprt_connected(xprt),
+			sock_flag(sk, SOCK_DEAD),
+			sock_flag(sk, SOCK_ZAPPED),
+			sk->sk_shutdown);
+
+	transport = container_of(xprt, struct sock_xprt, xprt);
+	trace_rpc_socket_state_change(xprt, sk->sk_socket);
+	switch (sk->sk_state) {
+	case TCP_ESTABLISHED:
+		/* NOISE: TCP is up. Signal the connect worker so it can
+		 * proceed with the Noise handshake synchronously.
+		 */
+		complete(&transport->handshake_done);
+		break;
+	case TCP_FIN_WAIT1:
+		/* The client initiated a shutdown of the socket */
+		xprt->connect_cookie++;
+		xprt->reestablish_timeout = 0;
+		set_bit(XPRT_CLOSING, &xprt->state);
+		smp_mb__before_atomic();
+		clear_bit(XPRT_CONNECTED, &xprt->state);
+		clear_bit(XPRT_CLOSE_WAIT, &xprt->state);
+		smp_mb__after_atomic();
+		break;
+	case TCP_CLOSE_WAIT:
+		/* The server initiated a shutdown of the socket */
+		xprt->connect_cookie++;
+		clear_bit(XPRT_CONNECTED, &xprt->state);
+		xs_run_error_worker(transport, XPRT_SOCK_WAKE_DISCONNECT);
+		fallthrough;
+	case TCP_CLOSING:
+		/*
+		 * If the server closed down the connection, make sure that
+		 * we back off before reconnecting
+		 */
+		if (xprt->reestablish_timeout < XS_TCP_INIT_REEST_TO)
+			xprt->reestablish_timeout = XS_TCP_INIT_REEST_TO;
+		break;
+	case TCP_LAST_ACK:
+		set_bit(XPRT_CLOSING, &xprt->state);
+		smp_mb__before_atomic();
+		clear_bit(XPRT_CONNECTED, &xprt->state);
+		smp_mb__after_atomic();
+		break;
+	case TCP_CLOSE:
+		if (test_and_clear_bit(XPRT_SOCK_CONNECTING,
+				       &transport->sock_state)) {
+			xs_reset_srcport(transport);
+			xprt_clear_connecting(xprt);
+		}
+		clear_bit(XPRT_CLOSING, &xprt->state);
+
 		/* Trigger the socket release */
 		xs_run_error_worker(transport, XPRT_SOCK_WAKE_DISCONNECT);
 	}
@@ -2409,6 +2490,64 @@ static int xs_tcp_finish_connecting(struct rpc_xprt *xprt, struct socket *sock)
 			      xprt->addrlen, O_NONBLOCK);
 }
 
+static int xs_tcp_noise_finish_connecting(struct rpc_xprt *xprt, struct socket *sock)
+{
+	struct sock_xprt *transport = container_of(xprt, struct sock_xprt, xprt);
+
+	if (!transport->inet) {
+		struct sock *sk = sock->sk;
+
+		/* Avoid temporary address, they are bad for long-lived
+		 * connections such as NFS mounts.
+		 * RFC4941, section 3.6 suggests that:
+		 *    Individual applications, which have specific
+		 *    knowledge about the normal duration of connections,
+		 *    MAY override this as appropriate.
+		 */
+		if (xs_addr(xprt)->sa_family == PF_INET6) {
+			ip6_sock_set_addr_preferences(sk,
+				IPV6_PREFER_SRC_PUBLIC);
+		}
+
+		xs_tcp_set_socket_timeouts(xprt, sock);
+		tcp_sock_set_nodelay(sk);
+
+		lock_sock(sk);
+
+		xs_save_old_callbacks(transport, sk);
+
+		sk->sk_user_data = xprt;
+		sk->sk_data_ready = xs_data_ready;
+		sk->sk_state_change = xs_tcp_noise_state_change;
+		sk->sk_write_space = xs_tcp_write_space;
+		sk->sk_error_report = xs_error_report;
+		sk->sk_use_task_frag = false;
+
+		/* socket options */
+		sock_reset_flag(sk, SOCK_LINGER);
+
+		xprt_clear_connected(xprt);
+
+		/* Reset to new socket */
+		transport->sock = sock;
+		transport->inet = sk;
+
+		release_sock(sk);
+	}
+
+	if (!xprt_bound(xprt))
+		return -ENOTCONN;
+
+	xs_set_memalloc(xprt);
+
+	xs_stream_start_connect(transport);
+
+	/* Tell the socket layer to start connecting... */
+	set_bit(XPRT_SOCK_CONNECTING, &transport->sock_state);
+	return kernel_connect(sock, (struct sockaddr_unsized *)xs_addr(xprt),
+			      xprt->addrlen, O_NONBLOCK);
+}
+
 /**
  * xs_tcp_setup_socket - create a TCP socket and connect to a remote endpoint
  * @work: queued work item
@@ -2505,6 +2644,139 @@ out_unlock:
 	current_restore_flags(pflags, PF_MEMALLOC);
 }
 
+/**
+ * xs_noise_handshake_sync - perform a Noise IKpsk2 handshake synchronously
+ * @xprt: RPC transport
+ *
+ * Called from the connect worker after TCP reaches ESTABLISHED.
+ * Returns 0 on success, negative errno on failure.
+ */
+static int xs_noise_handshake_sync(struct rpc_xprt *xprt)
+{
+	struct sock_xprt *transport = container_of(xprt, struct sock_xprt, xprt);
+
+	/* TODO: perform the actual Noise IKpsk2 handshake here */
+
+	if (!xprt_test_and_set_connected(xprt)) {
+		xprt->connect_cookie++;
+		clear_bit(XPRT_SOCK_CONNECTING, &transport->sock_state);
+		xprt_clear_connecting(xprt);
+
+		xprt->stat.connect_count++;
+		xprt->stat.connect_time += (long)jiffies -
+					   xprt->stat.connect_start;
+		xprt_wake_pending_tasks(xprt, -EAGAIN);
+	}
+
+	return 0;
+}
+
+/**
+ * xs_tcp_noise_setup_socket - create a TCP socket and connect securely
+ *     (with Noise handshake) to a remote endpoint
+ * @work: queued work item
+ *
+ * Invoked by a work queue tasklet. Performs TCP connect, waits for
+ * ESTABLISHED, then drives the Noise handshake synchronously.
+ */
+static void xs_tcp_noise_setup_socket(struct work_struct *work)
+{
+	struct sock_xprt *transport =
+		container_of(work, struct sock_xprt, connect_worker.work);
+	struct socket *sock = transport->sock;
+	struct rpc_xprt *xprt = &transport->xprt;
+	int status;
+	unsigned int pflags = current->flags;
+
+	if (atomic_read(&xprt->swapper))
+		current->flags |= PF_MEMALLOC;
+
+	if (xprt_connected(xprt))
+		goto out;
+	if (test_and_clear_bit(XPRT_SOCK_CONNECT_SENT,
+			       &transport->sock_state) ||
+	    !sock) {
+		xs_reset_transport(transport);
+		sock = xs_create_sock(xprt, transport, xs_addr(xprt)->sa_family,
+				      SOCK_STREAM, IPPROTO_TCP, true);
+		if (IS_ERR(sock)) {
+			xprt_wake_pending_tasks(xprt, PTR_ERR(sock));
+			goto out;
+		}
+	}
+
+	dprintk("RPC:       worker connecting xprt %p via %s to "
+				"%s (port %s)\n", xprt,
+			xprt->address_strings[RPC_DISPLAY_PROTO],
+			xprt->address_strings[RPC_DISPLAY_ADDR],
+			xprt->address_strings[RPC_DISPLAY_PORT]);
+
+	init_completion(&transport->handshake_done);
+	status = xs_tcp_noise_finish_connecting(xprt, sock);
+	trace_rpc_socket_connect(xprt, sock, status);
+	dprintk("RPC:       %p connect status %d connected %d sock state %d\n",
+			xprt, -status, xprt_connected(xprt),
+			sock->sk->sk_state);
+	switch (status) {
+	case 0:
+		break;
+	case -EINPROGRESS:
+		set_bit(XPRT_SOCK_CONNECT_SENT, &transport->sock_state);
+		if (xprt->reestablish_timeout < XS_TCP_INIT_REEST_TO)
+			xprt->reestablish_timeout = XS_TCP_INIT_REEST_TO;
+		/* NOISE: wait for TCP to reach ESTABLISHED */
+		status = wait_for_completion_interruptible_timeout(
+					&transport->handshake_done,
+					XS_NOISE_HANDSHAKE_TO);
+		if (status <= 0) {
+			if (status == 0)
+				status = -ETIMEDOUT;
+			goto out_close;
+		}
+		status = 0;
+		break;
+	case -EALREADY:
+		goto out_unlock;
+	case -EADDRNOTAVAIL:
+		transport->srcport = 0;
+		status = -EAGAIN;
+		goto out_close;
+	case -EPERM:
+		status = -ECONNREFUSED;
+		fallthrough;
+	case -EINVAL:
+	case -ECONNREFUSED:
+	case -ECONNRESET:
+	case -ENETDOWN:
+	case -ENETUNREACH:
+	case -EHOSTUNREACH:
+	case -EADDRINUSE:
+	case -ENOBUFS:
+	case -ENOTCONN:
+		goto out_close;
+	default:
+		printk("%s: connect returned unhandled error %d\n",
+			__func__, status);
+		status = -EAGAIN;
+		goto out_close;
+	}
+
+	/* NOISE: TCP is up — perform handshake synchronously */
+	status = xs_noise_handshake_sync(xprt);
+	if (status)
+		goto out_close;
+
+	goto out_unlock;
+
+out_close:
+	xprt_wake_pending_tasks(xprt, status);
+	xs_tcp_force_close(xprt);
+out:
+	xprt_clear_connecting(xprt);
+out_unlock:
+	xprt_unlock_connect(xprt, transport);
+	current_restore_flags(pflags, PF_MEMALLOC);
+}
 /*
  * Transfer the connected socket to @upper_transport, then mark that
  * xprt CONNECTED.
@@ -3453,6 +3725,100 @@ out_err:
 }
 
 /**
+ * NOISE 
+ * xs_setup_tcp_noise - Set up transport to use a TCP socket with noise encryption
+ * @args: rpc transport creation arguments
+ *
+ */
+static struct rpc_xprt *xs_setup_tcp_noise(struct xprt_create *args)
+{
+	struct sockaddr *addr = args->dstaddr;
+	struct rpc_xprt *xprt;
+	struct sock_xprt *transport;
+	struct rpc_xprt *ret;
+	unsigned int max_slot_table_size = xprt_max_tcp_slot_table_entries;
+
+	if (args->flags & XPRT_CREATE_INFINITE_SLOTS)
+		max_slot_table_size = RPC_MAX_SLOT_TABLE_LIMIT;
+
+	xprt = xs_setup_xprt(args, xprt_tcp_slot_table_entries,
+			     max_slot_table_size);
+	if (IS_ERR(xprt))
+		return xprt;
+	transport = container_of(xprt, struct sock_xprt, xprt);
+
+	xprt->prot = IPPROTO_TCP;
+	xprt->xprt_class = &xs_tcp_noise_transport;
+	xprt->max_payload = RPC_MAX_FRAGMENT_SIZE;
+
+	xprt->bind_timeout = XS_BIND_TO;
+	xprt->reestablish_timeout = XS_TCP_INIT_REEST_TO;
+	xprt->idle_timeout = XS_IDLE_DISC_TO;
+
+	xprt->ops = &xs_tcp_ops;
+	xprt->timeout = &xs_tcp_default_timeout;
+
+	xprt->max_reconnect_timeout = xprt->timeout->to_maxval;
+	xprt->connect_timeout = xprt->timeout->to_initval *
+		(xprt->timeout->to_retries + 1);
+
+	INIT_WORK(&transport->recv_worker, xs_stream_data_receive_workfn);
+	INIT_WORK(&transport->error_worker, xs_error_handle);
+	/* NOISE init handshake worker*/
+	INIT_WORK(&transport->noise_handshake_worker, xs_noise_handshake);
+
+
+	switch (args->xprtsec.policy) {
+	case RPC_XPRTSEC_NOISE:
+		xprt->xprtsec = args->xprtsec;
+		//temp : avoid infinite loop because no handshake follows
+		//xprt->xprtsec.policy = RPC_XPRTSEC_NONE; 
+		/* NOISE setup socket function with handshake*/
+		INIT_DELAYED_WORK(&transport->connect_worker, xs_tcp_noise_setup_socket);
+		pr_info("RPC: xprt %p: TCP socket with IKpsk2 handshake \n", xprt);
+		break;
+	default:
+		ret = ERR_PTR(-EACCES);
+		goto out_err;
+	}
+
+	switch (addr->sa_family) {
+	case AF_INET:
+		if (((struct sockaddr_in *)addr)->sin_port != htons(0))
+			xprt_set_bound(xprt);
+
+		xs_format_peer_addresses(xprt, "tcp", RPCBIND_NETID_TCP);
+		break;
+	case AF_INET6:
+		if (((struct sockaddr_in6 *)addr)->sin6_port != htons(0))
+			xprt_set_bound(xprt);
+
+		xs_format_peer_addresses(xprt, "tcp", RPCBIND_NETID_TCP6);
+		break;
+	default:
+		ret = ERR_PTR(-EAFNOSUPPORT);
+		goto out_err;
+	}
+
+	if (xprt_bound(xprt))
+		dprintk("RPC:       set up xprt to %s (port %s) via %s\n",
+			xprt->address_strings[RPC_DISPLAY_ADDR],
+			xprt->address_strings[RPC_DISPLAY_PORT],
+			xprt->address_strings[RPC_DISPLAY_PROTO]);
+	else
+		dprintk("RPC:       set up xprt to %s (autobind) via %s\n",
+			xprt->address_strings[RPC_DISPLAY_ADDR],
+			xprt->address_strings[RPC_DISPLAY_PROTO]);
+
+	if (try_module_get(THIS_MODULE))
+		return xprt;
+	ret = ERR_PTR(-EINVAL);
+out_err:
+	xs_xprt_free(xprt);
+	return ret;
+}
+
+/**
  * xs_setup_tcp_tls - Set up transport to use a TCP with TLS
  * @args: rpc transport creation arguments
  *
@@ -3658,6 +4024,16 @@ static struct xprt_class	xs_tcp_tls_transport = {
 	.netid		= { "tcp", "tcp6", "" },
 };
 
+/* NOISE xprt class struct*/
+static struct xprt_class	xs_tcp_noise_transport = {
+	.list		= LIST_HEAD_INIT(xs_tcp_noise_transport.list),
+	.name		= "tcp-over-noise",
+	.owner		= THIS_MODULE,
+	.ident		= XPRT_TRANSPORT_TCP_NOISE,
+	.setup		= xs_setup_tcp_noise,
+	.netid		= { "tcp", "tcp6", "" },
+};
+
 static struct xprt_class	xs_bc_tcp_transport = {
 	.list		= LIST_HEAD_INIT(xs_bc_tcp_transport.list),
 	.name		= "tcp NFSv4.1 backchannel",
@@ -3681,6 +4057,8 @@ int init_socket_xprt(void)
 	xprt_register_transport(&xs_tcp_transport);
 	xprt_register_transport(&xs_tcp_tls_transport);
 	xprt_register_transport(&xs_bc_tcp_transport);
+	/* NOISE register transport */
+	xprt_register_transport(&xs_tcp_noise_transport);
 
 	return 0;
 }
@@ -3701,6 +4079,8 @@ void cleanup_socket_xprt(void)
 	xprt_unregister_transport(&xs_tcp_transport);
 	xprt_unregister_transport(&xs_tcp_tls_transport);
 	xprt_unregister_transport(&xs_bc_tcp_transport);
+	/* NOISE register transport */
+	xprt_unregister_transport(&xs_tcp_noise_transport);
 }
 
 static int param_set_portnr(const char *val, const struct kernel_param *kp)
