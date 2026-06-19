@@ -13,6 +13,7 @@
 
 #include <linux/types.h>
 #include <linux/atomic.h>
+#include <linux/limits.h>
 
 #include <crypto/curve25519.h>
 #include <crypto/chacha20poly1305.h>
@@ -45,6 +46,11 @@ enum noise_lengths {
 /* taken from wireguard */
 enum limits {
 	INITIATIONS_PER_SECOND = 50
+};
+
+/* transport-phase limits */
+enum transport_limits {
+	REJECT_AFTER_MESSAGES = U64_MAX - 16
 };
 
 /*
