@@ -22,8 +22,18 @@
 #include <linux/kernel.h>
 #include <linux/param.h>
 #include <linux/skbuff.h>
+#include <linux/version.h>
 
 #include "noise_crypto.h"
+
+/* NOISE BLAKE2s library compat: v6.19 renamed struct blake2s_state ->
+ * blake2s_ctx and reordered the one-shot blake2s() arguments. Map the old
+ * struct name to the new one so the same source builds on both <6.19 (e.g.
+ * out-of-tree on 6.1) and >=6.19 / 7.x kernels.
+ */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 19, 0)
+#define blake2s_state blake2s_ctx
+#endif
  
 /*
 	Vars
@@ -45,7 +55,15 @@ void __init ikpsk2_noise_init(void)
 		handshake_init_hash = H0
 	*/
 	struct blake2s_state blake;
-	blake2s(handshake_init_chaining_key, handshake_name, NULL, NOISE_HASH_LEN, sizeof(handshake_name), 0);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 19, 0)
+	/* new arg order: (key, keylen, in, inlen, out, outlen) */
+	blake2s(NULL, 0, handshake_name, sizeof(handshake_name),
+		handshake_init_chaining_key, NOISE_HASH_LEN);
+#else
+	/* old arg order: (out, in, key, outlen, inlen, keylen) */
+	blake2s(handshake_init_chaining_key, handshake_name, NULL,
+		NOISE_HASH_LEN, sizeof(handshake_name), 0);
+#endif
 	blake2s_init(&blake, NOISE_HASH_LEN);
 	blake2s_update(&blake, handshake_init_chaining_key, NOISE_HASH_LEN);
 	blake2s_update(&blake, identifier_name, sizeof(identifier_name));
