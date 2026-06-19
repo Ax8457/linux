@@ -8,6 +8,9 @@
 #ifndef _LINUX_SUNRPC_XPRTSOCK_H
 #define _LINUX_SUNRPC_XPRTSOCK_H
 
+/* NOISE pull in struct noise_peer for the per-connection handshake state */
+#include <net/noise.h>
+
 int		init_socket_xprt(void);
 void		cleanup_socket_xprt(void);
 
@@ -59,6 +62,8 @@ struct sock_xprt {
 	struct work_struct	recv_worker;
 	struct mutex		recv_mutex;
 	struct completion	handshake_done;
+	/* NOISE noise_peer struct to store data of handshake */
+	struct noise_peer *peer;
 	struct sockaddr_storage	srcaddr;
 	unsigned short		srcport;
 	int			xprt_err;

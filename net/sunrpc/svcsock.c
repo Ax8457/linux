@@ -448,6 +448,194 @@ static void svc_tcp_kill_temp_xprt(struct svc_xprt *xprt)
 	sock_no_linger(svsk->sk_sock->sk);
 }
 
+/* NOISE enable the Noise IKpsk2 responder on accepted TCP connections.
+ * When set, every accepted TCP connection runs the in-kernel Noise handshake
+ * before any RPC traffic, mirroring the client in net/sunrpc/xprtsock.c.
+ */
+static bool svc_noise;
+module_param(svc_noise, bool, 0644);
+MODULE_PARM_DESC(svc_noise,
+		 "Expect a Noise IKpsk2 handshake on accepted TCP connections");
+
+/* NOISE hardcoded test keys.
+ *
+ * INSECURE placeholder for bring-up only. These MUST match the client values
+ * in net/sunrpc/xprtsock.c: the server static private is the same scalar the
+ * client used to derive the server's static public, so the Diffie-Hellman
+ * results agree, and the PSK is the same arbitrary 32 bytes. The client's
+ * static public is recovered from msg1 by handshake_consume_initiation(), so
+ * the server does not need the client private key.
+ */
+static const u8 svc_noise_server_static_private[NOISE_PUBLIC_KEY_LEN] = {
+	0x70, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27,
+	0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e, 0x2f,
+	0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37,
+	0x38, 0x39, 0x3a, 0x3b, 0x3c, 0x3d, 0x3e, 0x4f,
+};
+static const u8 svc_noise_psk[NOISE_SYMMETRIC_KEY_LEN] = {
+	0xc0, 0xc1, 0xc2, 0xc3, 0xc4, 0xc5, 0xc6, 0xc7,
+	0xc8, 0xc9, 0xca, 0xcb, 0xcc, 0xcd, 0xce, 0xcf,
+	0xd0, 0xd1, 0xd2, 0xd3, 0xd4, 0xd5, 0xd6, 0xd7,
+	0xd8, 0xd9, 0xda, 0xdb, 0xdc, 0xdd, 0xde, 0xdf,
+};
+
+/* NOISE shared local static identity (single-client model for now) */
+static struct noise_identity svc_noise_identity;
+
+/*
+ * svc_noise_setup_keys - install the server static identity and PSK before the
+ * IKpsk2 responder exchange. The remote (client) static public key is filled in
+ * by handshake_consume_initiation() from the decrypted msg1.
+ */
+static int svc_noise_setup_keys(struct noise_peer *peer)
+{
+	struct noise_handshake *hs = &peer->handshake;
+
+	memcpy(svc_noise_identity.static_private,
+	       svc_noise_server_static_private, NOISE_PUBLIC_KEY_LEN);
+	curve25519_clamp_secret(svc_noise_identity.static_private);
+	if (!curve25519_generate_public(svc_noise_identity.static_public,
+					svc_noise_identity.static_private))
+		return -EINVAL;
+
+	hs->static_identity = &svc_noise_identity;
+	memcpy(hs->psk, svc_noise_psk, NOISE_SYMMETRIC_KEY_LEN);
+	hs->state = HANDSHAKE_ZEROED;
+	return 0;
+}
+
+/* svc_noise_send - send exactly @len bytes over the TCP socket */
+static int svc_noise_send(struct socket *sock, void *buf, size_t len)
+{
+	struct kvec iov = { .iov_base = buf, .iov_len = len };
+	struct msghdr msg = { };
+	int ret;
+
+	ret = kernel_sendmsg(sock, &msg, &iov, 1, len);
+	if (ret < 0)
+		return ret;
+	return ret == len ? 0 : -EIO;
+}
+
+/* svc_noise_recv - block until exactly @len bytes are read from the socket */
+static int svc_noise_recv(struct socket *sock, void *buf, size_t len)
+{
+	struct kvec iov = { .iov_base = buf, .iov_len = len };
+	struct msghdr msg = { .msg_flags = MSG_WAITALL };
+	int ret;
+
+	ret = kernel_recvmsg(sock, &msg, &iov, 1, len, MSG_WAITALL);
+	if (ret < 0)
+		return ret;
+	return ret == len ? 0 : -EIO;
+}
+
+/*
+ * NOISE transport-phase helpers (payload encryption, WireGuard-style: one
+ * counter-nonce AEAD message per RPC record). Ready for use once
+ * svc_tcp_recvfrom/svc_tcp_sendto are wired to decrypt/encrypt; __maybe_unused
+ * until then so the build stays clean. Must stay symmetric with the client
+ * wrappers in net/sunrpc/xprtsock.c.
+ */
+static int __maybe_unused
+svc_noise_encrypt(struct svc_sock *svsk, u8 *dst, const u8 *src,
+		  size_t len, u64 *counter)
+{
+	if (!svsk->peer)
+		return -ENOTCONN;
+	if (!noise_transport_encrypt(svsk->peer, dst, src, len, counter))
+		return -EINVAL;
+	return 0;
+}
+
+static int __maybe_unused
+svc_noise_decrypt(struct svc_sock *svsk, u8 *dst, const u8 *src,
+		  size_t len, u64 counter)
+{
+	if (!svsk->peer)
+		return -ENOTCONN;
+	if (!noise_transport_decrypt(svsk->peer, dst, src, len, counter))
+		return -EBADMSG;
+	return 0;
+}
+
+/**
+ * svc_noise_handshake - run the Noise IKpsk2 responder synchronously
+ * @xprt: accepted transport endpoint with XPT_HANDSHAKE set
+ *
+ * Consumes the initiator's msg1, sends msg2, and derives the transport-phase
+ * session keys. On success the transport is marked ready for RPC traffic; on
+ * failure it is closed. Mirrors svc_tcp_handshake()'s enqueue/close tail.
+ */
+static void svc_noise_handshake(struct svc_xprt *xprt)
+{
+	struct svc_sock *svsk = container_of(xprt, struct svc_sock, sk_xprt);
+	struct socket *sock = svsk->sk_sock;
+	struct ikpsk2_msg1 m1;
+	struct ikpsk2_msg2 m2;
+	long saved_rcvtimeo;
+	int status;
+
+	if (!svsk->peer) {
+		svsk->peer = kzalloc(sizeof(*svsk->peer), GFP_KERNEL);
+		if (!svsk->peer) {
+			status = -ENOMEM;
+			goto out_close;
+		}
+	}
+
+	saved_rcvtimeo = sock->sk->sk_rcvtimeo;
+	sock->sk->sk_rcvtimeo = SVC_HANDSHAKE_TO;
+
+	status = svc_noise_setup_keys(svsk->peer);
+	if (status)
+		goto out_restore;
+
+	/* msg1 : initiator -> responder */
+	status = svc_noise_recv(sock, &m1, sizeof(m1));
+	if (status)
+		goto out_restore;
+	if (!handshake_consume_initiation(&m1, svsk->peer)) {
+		status = -EACCES;
+		goto out_restore;
+	}
+
+	/* msg2 : responder -> initiator */
+	if (!handshake_create_response(&m2, svsk->peer)) {
+		status = -EINVAL;
+		goto out_restore;
+	}
+	status = svc_noise_send(sock, &m2, sizeof(m2));
+	if (status)
+		goto out_restore;
+
+	/* derive the transport-phase session keys */
+	if (!begin_session(svsk->peer)) {
+		status = -EINVAL;
+		goto out_restore;
+	}
+	status = 0;
+out_restore:
+	memzero_explicit(&m1, sizeof(m1));
+	memzero_explicit(&m2, sizeof(m2));
+	sock->sk->sk_rcvtimeo = saved_rcvtimeo;
+	if (status)
+		goto out_close;
+
+	/* Mark the transport ready for RPC traffic */
+	clear_bit(XPT_HANDSHAKE, &xprt->xpt_flags);
+	set_bit(XPT_DATA, &xprt->xpt_flags);
+	svc_xprt_enqueue(xprt);
+	return;
+
+out_close:
+	pr_debug("svc: %p Noise handshake failed (%d)\n", xprt, status);
+	set_bit(XPT_CLOSE, &xprt->xpt_flags);
+	clear_bit(XPT_HANDSHAKE, &xprt->xpt_flags);
+	set_bit(XPT_DATA, &xprt->xpt_flags);
+	svc_xprt_enqueue(xprt);
+}
+
 /**
  * svc_tcp_handshake_done - Handshake completion handler
  * @data: address of xprt to wake
@@ -488,6 +676,12 @@ static void svc_tcp_handshake(struct svc_xprt *xprt)
 		.ta_data	= xprt,
 	};
 	int ret;
+
+	/* NOISE run the in-kernel Noise responder instead of the TLS upcall */
+	if (svc_noise) {
+		svc_noise_handshake(xprt);
+		return;
+	}
 
 	trace_svc_tls_upcall(xprt);
 
@@ -969,6 +1163,10 @@ static struct svc_xprt *svc_tcp_accept(struct svc_xprt *xprt)
 		clear_bit(XPT_LOCAL, &newsvsk->sk_xprt.xpt_flags);
 	if (serv->sv_stats)
 		serv->sv_stats->nettcpconn++;
+
+	/* NOISE require the Noise IKpsk2 handshake before any RPC on this conn */
+	if (svc_noise)
+		set_bit(XPT_HANDSHAKE, &newsvsk->sk_xprt.xpt_flags);
 
 	return &newsvsk->sk_xprt;
 
@@ -1673,5 +1871,7 @@ static void svc_sock_free(struct svc_xprt *xprt)
 
 	page_frag_cache_drain(&svsk->sk_frag_cache);
 	kfree(svsk->sk_bvec);
+	/* NOISE release per-connection handshake/session state (NULL if unused) */
+	kfree(svsk->peer);
 	kfree(svsk);
 }

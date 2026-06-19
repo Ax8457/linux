@@ -85,6 +85,8 @@ source "net/packet/Kconfig"
 source "net/psp/Kconfig"
 source "net/unix/Kconfig"
 source "net/tls/Kconfig"
+# NOISE make noise available in the kernel tree 
+source "net/noise/Kconfig"
 source "net/xfrm/Kconfig"
 source "net/iucv/Kconfig"
 source "net/smc/Kconfig"

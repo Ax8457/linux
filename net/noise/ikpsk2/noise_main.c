@@ -1,11 +1,16 @@
-/*  
- *  hello-2.c - Demonstrating the module_init() and module_exit() macros.
- *  This is preferred over using init_module() and cleanup_module().
+// SPDX-License-Identifier: GPL-2.0
+/*
+ *	NFSv4 Data-In-Flight Encryption over Noise protocol framework
+ *
+ *	Module init: prepares the IKpsk2 initial chaining key / hash.
+ *
+ *	Axel Biegalski - HWU MSc project
  */
 #include <linux/module.h>	/* Needed by all modules */
 #include <linux/kernel.h>	/* Needed for KERN_INFO */
 #include <linux/init.h>		/* Needed for the macros */
-#include "handshake.h"
+/* NOISE is now available in linux kernel */
+#include <net/noise.h>
 
 static int __init noise_init(void)
 {

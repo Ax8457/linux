@@ -11,7 +11,6 @@
 #include <crypto/chacha20poly1305.h>
 
 #include "noise_crypto.h"
-#include "noise_transport.h"
 
 /*
 	encrypt function

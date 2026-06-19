@@ -12,6 +12,8 @@
 
 #include <linux/sunrpc/svc.h>
 #include <linux/sunrpc/svc_xprt.h>
+/* NOISE pull in struct noise_peer for the per-connection handshake state */
+#include <net/noise.h>
 
 /*
  * RPC server socket.
@@ -42,6 +44,9 @@ struct svc_sock {
 	struct page_frag_cache  sk_frag_cache;
 
 	struct completion	sk_handshake_done;
+
+	/* NOISE per-connection Noise IKpsk2 state (handshake + session keys) */
+	struct noise_peer	*peer;
 
 	/* received data */
 	unsigned long		sk_maxpages;

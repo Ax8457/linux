@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# Noise protocol framework configuration
+#
+
+# NOISE source the IKpsk2 framework config
+source "net/noise/ikpsk2/Kconfig"
