@@ -47,6 +47,9 @@ struct svc_sock {
 
 	/* NOISE per-connection Noise IKpsk2 state (handshake + session keys) */
 	struct noise_peer	*peer;
+	/* NOISE transport-phase: active once keys are derived + RX reassembly */
+	bool			noise_active;
+	struct noise_rx		noise_rx;
 
 	/* received data */
 	unsigned long		sk_maxpages;

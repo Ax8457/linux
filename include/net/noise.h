@@ -140,4 +140,35 @@ bool begin_session(struct noise_peer *peer);
 bool __must_check noise_transport_encrypt(struct noise_peer *peer, u8 *dst, const u8 *src, size_t src_len, u64 *counter);
 bool __must_check noise_transport_decrypt(struct noise_peer *peer, u8 *dst, const u8 *src, size_t src_len, u64 counter);
 
+/*
+ * Transport-phase record framing (WireGuard-style explicit counter).
+ *
+ * On-wire layout of one sealed record:
+ *	[ __be32 body_len ][ __le64 counter ][ ciphertext (plaintext + tag) ]
+ * where body_len = NOISE_REC_CTR_SIZE + len(ciphertext).
+ */
+enum noise_record {
+	NOISE_REC_LEN_SIZE = 4,				/* __be32 body length prefix */
+	NOISE_REC_CTR_SIZE = 8,				/* __le64 counter (nonce)    */
+	NOISE_REC_OVERHEAD = NOISE_REC_LEN_SIZE + NOISE_REC_CTR_SIZE + NOISE_AUTHTAG_LEN,
+};
+
+/* Per-connection receive reassembly state for sealed records. */
+struct noise_rx {
+	u8	hdr[NOISE_REC_LEN_SIZE];	/* length prefix being read   */
+	u32	hdr_got;
+	u8	*body;				/* [counter][ciphertext]      */
+	u32	body_len;			/* expected, from hdr         */
+	u32	body_got;
+	u8	*pt;				/* decrypted plaintext        */
+	u32	pt_len;
+	u32	pt_pos;				/* bytes already consumed     */
+};
+
+/* seal @pt (@ptlen bytes) into @dst (>= ptlen + NOISE_REC_OVERHEAD); returns wire length */
+int noise_record_seal(struct noise_peer *peer, u8 *dst, const u8 *pt, u32 ptlen);
+/* open a frame body [counter][ciphertext] of @body_len bytes into @pt; returns plaintext length or <0 */
+int noise_record_open(struct noise_peer *peer, const u8 *body, u32 body_len, u8 *pt);
+void noise_rx_reset(struct noise_rx *rx);
+
 #endif /* _NET_NOISE_H */

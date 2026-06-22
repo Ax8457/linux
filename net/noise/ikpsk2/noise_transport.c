@@ -8,6 +8,10 @@
 */
 #include <linux/types.h>
 #include <linux/atomic.h>
+#include <linux/slab.h>
+#include <linux/string.h>
+#include <linux/errno.h>
+#include <linux/unaligned.h>
 #include <crypto/chacha20poly1305.h>
 
 #include "noise_crypto.h"
@@ -50,3 +54,62 @@ bool __must_check noise_transport_decrypt(struct noise_peer *peer, u8 *dst, cons
 
 EXPORT_SYMBOL(noise_transport_encrypt);
 EXPORT_SYMBOL(noise_transport_decrypt);
+
+/*
+	Seal one plaintext record into the wire framing:
+	[__be32 body_len][__le64 counter][ciphertext]
+	Returns the total number of wire bytes written to @dst, or <0 on error.
+*/
+int noise_record_seal(struct noise_peer *peer, u8 *dst, const u8 *pt, u32 ptlen)
+{
+	u32 ctlen = ptlen + NOISE_AUTHTAG_LEN;
+	u32 body_len = NOISE_REC_CTR_SIZE + ctlen;
+	u64 counter;
+
+	if (!noise_transport_encrypt(peer,
+				     dst + NOISE_REC_LEN_SIZE + NOISE_REC_CTR_SIZE,
+				     pt, ptlen, &counter))
+		return -EINVAL;
+
+	put_unaligned_be32(body_len, dst);
+	put_unaligned_le64(counter, dst + NOISE_REC_LEN_SIZE);
+	return NOISE_REC_LEN_SIZE + body_len;
+}
+EXPORT_SYMBOL(noise_record_seal);
+
+/*
+	Open a frame body [__le64 counter][ciphertext] of @body_len bytes into @pt.
+	Enforces a monotonic (in-order TCP) anti-replay check on the counter.
+	Returns the recovered plaintext length, or <0 on error.
+*/
+int noise_record_open(struct noise_peer *peer, const u8 *body, u32 body_len, u8 *pt)
+{
+	u32 ctlen;
+	u64 counter;
+
+	if (body_len < NOISE_REC_CTR_SIZE + NOISE_AUTHTAG_LEN)
+		return -EBADMSG;
+
+	counter = get_unaligned_le64(body);
+	ctlen = body_len - NOISE_REC_CTR_SIZE;
+
+	/* in-order stream: a counter that goes backwards is a replay */
+	if (counter < peer->symmetric_keys.receiving_counter)
+		return -EBADMSG;
+
+	if (!noise_transport_decrypt(peer, pt, body + NOISE_REC_CTR_SIZE, ctlen,
+				     counter))
+		return -EBADMSG;
+
+	peer->symmetric_keys.receiving_counter = counter + 1;
+	return ctlen - NOISE_AUTHTAG_LEN;
+}
+EXPORT_SYMBOL(noise_record_open);
+
+void noise_rx_reset(struct noise_rx *rx)
+{
+	kfree(rx->body);
+	kfree(rx->pt);
+	memset(rx, 0, sizeof(*rx));
+}
+EXPORT_SYMBOL(noise_rx_reset);

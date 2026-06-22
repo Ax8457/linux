@@ -64,6 +64,9 @@ struct sock_xprt {
 	struct completion	handshake_done;
 	/* NOISE noise_peer struct to store data of handshake */
 	struct noise_peer *peer;
+	/* NOISE transport-phase state: active once keys are derived + RX reassembly */
+	bool			noise_active;
+	struct noise_rx		noise_rx;
 	struct sockaddr_storage	srcaddr;
 	unsigned short		srcport;
 	int			xprt_err;
