@@ -329,8 +329,11 @@ static int svc_noise_rx_fill(struct svc_sock *svsk)
 	if (!rx->body) {
 		rx->body_len = get_unaligned_be32(rx->hdr);
 		if (rx->body_len < NOISE_REC_CTR_SIZE + NOISE_AUTHTAG_LEN ||
-		    rx->body_len > RPC_MAX_FRAGMENT_SIZE + NOISE_REC_OVERHEAD)
+		    rx->body_len > RPC_MAX_FRAGMENT_SIZE + NOISE_REC_OVERHEAD) {
+			pr_warn_ratelimited("noise: server rx implausible frame length %u - unencrypted/garbage on the wire?\n",
+					    rx->body_len);
 			return -EMSGSIZE;
+		}
 		rx->body = kmalloc(rx->body_len, GFP_KERNEL);
 		if (!rx->body)
 			return -ENOMEM;

@@ -11,6 +11,7 @@
 #include <linux/slab.h>
 #include <linux/string.h>
 #include <linux/errno.h>
+#include <linux/printk.h>
 #include <linux/unaligned.h>
 #include <crypto/chacha20poly1305.h>
 
@@ -68,9 +69,12 @@ int noise_record_seal(struct noise_peer *peer, u8 *dst, const u8 *pt, u32 ptlen)
 
 	if (!noise_transport_encrypt(peer,
 				     dst + NOISE_REC_LEN_SIZE + NOISE_REC_CTR_SIZE,
-				     pt, ptlen, &counter))
+				     pt, ptlen, &counter)) {
+		pr_warn_ratelimited("noise: seal failed (counter exhausted)\n");
 		return -EINVAL;
+	}
 
+	pr_info_once("noise: transport encryption active (sealing records)\n");
 	put_unaligned_be32(body_len, dst);
 	put_unaligned_le64(counter, dst + NOISE_REC_LEN_SIZE);
 	return NOISE_REC_LEN_SIZE + body_len;
@@ -87,20 +91,30 @@ int noise_record_open(struct noise_peer *peer, const u8 *body, u32 body_len, u8 
 	u32 ctlen;
 	u64 counter;
 
-	if (body_len < NOISE_REC_CTR_SIZE + NOISE_AUTHTAG_LEN)
+	if (body_len < NOISE_REC_CTR_SIZE + NOISE_AUTHTAG_LEN) {
+		pr_warn_ratelimited("noise: drop short record (body_len=%u)\n",
+				    body_len);
 		return -EBADMSG;
+	}
 
 	counter = get_unaligned_le64(body);
 	ctlen = body_len - NOISE_REC_CTR_SIZE;
 
 	/* in-order stream: a counter that goes backwards is a replay */
-	if (counter < peer->symmetric_keys.receiving_counter)
+	if (counter < peer->symmetric_keys.receiving_counter) {
+		pr_warn_ratelimited("noise: drop replay/out-of-order record (counter=%llu, expected>=%llu)\n",
+				    counter, peer->symmetric_keys.receiving_counter);
 		return -EBADMSG;
+	}
 
 	if (!noise_transport_decrypt(peer, pt, body + NOISE_REC_CTR_SIZE, ctlen,
-				     counter))
+				     counter)) {
+		pr_warn_ratelimited("noise: AEAD auth failed (counter=%llu) - key/framing mismatch or tampering\n",
+				    counter);
 		return -EBADMSG;
+	}
 
+	pr_info_once("noise: transport decryption active (opening records)\n");
 	peer->symmetric_keys.receiving_counter = counter + 1;
 	return ctlen - NOISE_AUTHTAG_LEN;
 }
