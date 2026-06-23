@@ -388,6 +388,13 @@ static int svc_noise_recvmsg(struct svc_sock *svsk, struct msghdr *msg)
 		if (r <= 0) {
 			if (got)
 				break;
+			if (r == -EAGAIN || r == -EWOULDBLOCK || r == -ENOMEM)
+				return r;	/* transient: caller retries */
+			/* EOF or framing/decrypt error: stream desynced -> drop
+			 * reassembly state and close the connection cleanly.
+			 */
+			noise_rx_reset(&svsk->noise_rx);
+			set_bit(XPT_CLOSE, &svsk->sk_xprt.xpt_flags);
 			return r;
 		}
 	}

@@ -523,7 +523,14 @@ static ssize_t xs_noise_recvmsg(struct sock_xprt *transport, struct socket *sock
 		if (r <= 0) {
 			if (got)
 				break;
-			return r;	/* 0 = EOF, <0 = -EAGAIN/error */
+			if (r == -EAGAIN || r == -EWOULDBLOCK || r == -ENOMEM)
+				return r;	/* transient: caller retries */
+			/* EOF or framing/decrypt error: the stream is desynced.
+			 * Drop reassembly state and ask for a clean shutdown
+			 * (reconnect + re-handshake) instead of spinning on it.
+			 */
+			noise_rx_reset(rx);
+			return -ESHUTDOWN;
 		}
 	}
 	return got > 0 ? got + seek : got;
@@ -3630,6 +3637,39 @@ static void bc_free(struct rpc_task *task)
 	free_page((unsigned long)buf);
 }
 
+/*
+ * NOISE: seal a backchannel Call with the connection's session keys.
+ * The keys live on the server svc_sock (shared with the fore-channel replies),
+ * and the call is sent on that same socket using the shared sending_counter, so
+ * the client decrypts both directions with a single receiving_counter.
+ * Returns the logical (marker + xdr) length on success, or <0 on error.
+ */
+static int xs_noise_bc_send(struct svc_sock *svsk, rpc_fraghdr marker,
+			    struct xdr_buf *xdr)
+{
+	u32 ptlen = sizeof(marker) + xdr->len;
+	u8 *pt, *frame;
+	int wirelen, ret;
+
+	pt = kmalloc(ptlen, GFP_KERNEL);
+	if (!pt)
+		return -ENOMEM;
+	frame = kmalloc(ptlen + NOISE_REC_OVERHEAD, GFP_KERNEL);
+	if (!frame) {
+		kfree(pt);
+		return -ENOMEM;
+	}
+	xs_noise_linearize(marker, xdr, pt);
+	wirelen = noise_record_seal(svsk->peer, frame, pt, ptlen);
+	if (wirelen < 0)
+		ret = wirelen;
+	else
+		ret = xs_noise_send_all(svsk->sk_sock, frame, wirelen);
+	kfree(pt);
+	kfree(frame);
+	return ret == 0 ? (int)ptlen : ret;
+}
+
 static int bc_sendto(struct rpc_rqst *req)
 {
 	struct xdr_buf *xdr = &req->rq_snd_buf;
@@ -3642,6 +3682,20 @@ static int bc_sendto(struct rpc_rqst *req)
 					 (u32)xdr->len);
 	unsigned int sent = 0;
 	int err;
+
+	/* NOISE: seal the backchannel Call when this connection is Noise-secured */
+	if (req->rq_xprt->bc_xprt) {
+		struct svc_sock *svsk = container_of(req->rq_xprt->bc_xprt,
+						     struct svc_sock, sk_xprt);
+
+		if (svsk->noise_active && svsk->peer) {
+			int rc = xs_noise_bc_send(svsk, marker, xdr);
+
+			if (rc < 0)
+				return rc == -ENOMEM ? -EAGAIN : -ENOTCONN;
+			return rc;
+		}
+	}
 
 	req->rq_xtime = ktime_get();
 	err = xdr_alloc_bvec(xdr, rpc_task_gfp_mask());
