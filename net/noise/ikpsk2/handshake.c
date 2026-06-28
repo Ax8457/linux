@@ -4,6 +4,8 @@
 *
 *	Axel Biegalski
 */
+#include <linux/timekeeping.h>
+
 #include "noise_crypto.h"
 
 
@@ -289,6 +291,15 @@ bool begin_session(struct noise_peer *peer)
 	else {
 		derive_keys(peer->symmetric_keys.receiving_key, peer->symmetric_keys.sending_key, peer->handshake.chaining_key);
 	}
+
+	/* Fresh keypair: restart the nonce counters and stamp its birthdate. The
+	 * peer struct is reused across reconnects, so this reset is required both
+	 * for the new session's counters to start clean and for the rekey
+	 * thresholds to measure the current keypair only.
+	 */
+	atomic64_set(&peer->symmetric_keys.sending_counter, 0);
+	peer->symmetric_keys.receiving_counter = 0;
+	peer->symmetric_keys.birthdate = ktime_get_seconds();
 
 	ret = true;
 out:

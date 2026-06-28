@@ -52,6 +52,19 @@ enum transport_limits {
 	REJECT_AFTER_MESSAGES = U64_MAX - 16
 };
 
+/* rekey thresholds (forward secrecy).
+ * Rekeying is implemented as a connection teardown + fresh handshake (reusing
+ * the transport reconnect path), not an in-place key rotation. Whichever
+ * threshold is crossed first triggers a reconnect, which re-derives keys on
+ * both ends. REKEY_AFTER_MESSAGES is a high backstop (well below the hard
+ * REJECT_AFTER_MESSAGES); REKEY_AFTER_TIME is the trigger that fires in
+ * practice.
+ */
+enum rekey_limits {
+	REKEY_AFTER_MESSAGES = 1ULL << 60,
+	REKEY_AFTER_TIME = 3600,	/* seconds (1 hour) */
+};
+
 /*
  * Structs
  */
@@ -62,6 +75,10 @@ struct noise_keypair {
 	u8 receiving_key[NOISE_SYMMETRIC_KEY_LEN];
 	atomic64_t sending_counter;
 	u64 receiving_counter;
+	/* seconds (ktime_get_seconds) at which this keypair was derived; used
+	 * to bound the key lifetime for rekeying.
+	 */
+	u64 birthdate;
 };
 
 /* identity */
@@ -138,6 +155,11 @@ bool begin_session(struct noise_peer *peer);
 /* transport phase (net/noise/ikpsk2/noise_transport.c) */
 bool __must_check noise_transport_encrypt(struct noise_peer *peer, u8 *dst, const u8 *src, size_t src_len, u64 *counter);
 bool __must_check noise_transport_decrypt(struct noise_peer *peer, u8 *dst, const u8 *src, size_t src_len, u64 counter);
+
+/* true once the current keypair has reached a rekey threshold (message count or
+ * age); the caller should drop the connection so a fresh handshake runs.
+ */
+bool noise_peer_should_rekey(struct noise_peer *peer);
 
 /*
  * Transport-phase record framing (WireGuard-style explicit counter).

@@ -1586,6 +1586,12 @@ static int svc_noise_sendmsg(struct svc_sock *svsk, struct svc_rqst *rqstp,
 		ret = svc_noise_send_all(svsk->sk_sock, frame, wirelen);
 	kfree(pt);
 	kfree(frame);
+	/* NOISE: rekey by dropping the connection once the keypair reaches a
+	 * message/time threshold. The reply above was sent under the old key; the
+	 * client then reconnects and a fresh handshake re-keys both directions.
+	 */
+	if (ret == 0 && noise_peer_should_rekey(svsk->peer))
+		set_bit(XPT_CLOSE, &svsk->sk_xprt.xpt_flags);
 	/* svc_tcp_sendto expects the logical (marker + xdr) byte count on success */
 	return ret == 0 ? (int)ptlen : ret;
 }

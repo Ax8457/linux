@@ -13,6 +13,7 @@
 #include <linux/errno.h>
 #include <linux/printk.h>
 #include <linux/unaligned.h>
+#include <linux/timekeeping.h>
 #include <crypto/chacha20poly1305.h>
 
 #include "noise_crypto.h"
@@ -55,6 +56,25 @@ bool __must_check noise_transport_decrypt(struct noise_peer *peer, u8 *dst, cons
 
 EXPORT_SYMBOL(noise_transport_encrypt);
 EXPORT_SYMBOL(noise_transport_decrypt);
+
+/*
+	Rekey policy: true once the current keypair has sent REKEY_AFTER_MESSAGES
+	records or has lived for REKEY_AFTER_TIME seconds. The caller drops the
+	connection so the transport reconnects and a fresh handshake re-keys both
+	directions. Driven by the sending side (its own sending_counter / birthdate),
+	so whichever peer is busier triggers the rekey first.
+*/
+bool noise_peer_should_rekey(struct noise_peer *peer)
+{
+	u64 sent = atomic64_read(&peer->symmetric_keys.sending_counter);
+
+	if (sent >= REKEY_AFTER_MESSAGES)
+		return true;
+
+	return (u64)ktime_get_seconds() - peer->symmetric_keys.birthdate >=
+	       REKEY_AFTER_TIME;
+}
+EXPORT_SYMBOL(noise_peer_should_rekey);
 
 /*
 	Seal one plaintext record into the wire framing:

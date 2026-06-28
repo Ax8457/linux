@@ -1345,6 +1345,13 @@ static int xs_tcp_send_request(struct rpc_rqst *req)
 			req->rq_xmit_bytes_sent += msglen;
 			req->rq_bytes_sent = msglen;
 			transport->xmit.offset = 0;
+			/* NOISE: rekey by forcing a reconnect once the keypair has
+			 * reached a message/time threshold. The current record went
+			 * out under the old key; the reconnect re-handshakes and RPC
+			 * retries any in-flight request on the fresh connection.
+			 */
+			if (noise_peer_should_rekey(transport->peer))
+				xprt_force_disconnect(&transport->xprt);
 			return 0;
 		}
 		return status == -ENOMEM ? -EAGAIN : -ENOTCONN;
