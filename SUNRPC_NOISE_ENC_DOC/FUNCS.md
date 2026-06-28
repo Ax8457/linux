@@ -36,7 +36,7 @@ Generic, side-agnostic building blocks called by both the client and the server.
 | `message_ee` / `message_se` | The `ee` and `se` DH mixes of the response. |
 | `mix_psk` | Mix the pre-shared key into the chaining key (the "psk2" step). |
 | `derive_keys` | Final HKDF producing the two transport session keys. |
-| `tai64n_now` | Produce a coarsened TAI64N timestamp for the initiation. |
+| `tai64n_now` | Produce a  TAI64N timestamp for the initiation. |
 
 ### 1.4 Transport phase — `noise_transport.c`
 | Function | Description |
