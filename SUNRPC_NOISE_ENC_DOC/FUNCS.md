@@ -48,6 +48,22 @@ Generic, side-agnostic building blocks called by both the client and the server.
 | `noise_rx_reset` | Free and zero the per-connection receive reassembly state. |
 | `noise_peer_should_rekey` | True once the keypair hits the message/time rekey threshold. |
 
+### 1.5 Socket encryption (ULP) — `noise_ulp.c`
+
+Socket-level transform installed after the handshake: swaps the socket's proto
+send/recv so the *whole* TCP byte stream is sealed/opened transparently (RPC
+writes plaintext). This is the socket-encryption model; it supersedes the
+RPC-layer payload hooks (now bypassed, `noise_active` left false).
+
+| Function | Description |
+|----------|-------------|
+| `noise_ulp_install` | After the handshake, swap `sk_prot` send/recv to the Noise versions. |
+| `noise_ulp_sendmsg` | proto send: chunk the plaintext stream and `noise_record_seal` each chunk; rekey trigger. |
+| `noise_ulp_recvmsg` | proto recv: serve the caller from decrypted records. |
+| `noise_ulp_rx_fill` | Reassemble + `noise_record_open` the next record (reuses `noise_rx`). |
+| `noise_ulp_read_some` | Read ciphertext from the lower (base) socket. |
+| `noise_ulp_close` | Restore the base proto, free the per-socket context, then close. |
+
 ---
 
 ## 2. Client side — `net/sunrpc/xprtsock.c`

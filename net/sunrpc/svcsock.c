@@ -693,9 +693,12 @@ static void svc_noise_handshake(struct svc_xprt *xprt)
 		status = -EINVAL;
 		goto out_restore;
 	}
-	/* NOISE: keys derived -> transport-phase encryption is now active */
-	svsk->noise_active = true;
-	status = 0;
+	/* NOISE: keys derived -> install socket encryption (ULP). RPC reverts to
+	 * its normal plaintext path (noise_active stays false); the socket now
+	 * seals/opens the whole byte stream transparently.
+	 */
+	svsk->noise_active = false;
+	status = noise_ulp_install(sock, svsk->peer);
 out_restore:
 	memzero_explicit(&m1, sizeof(m1));
 	memzero_explicit(&m2, sizeof(m2));

@@ -161,6 +161,13 @@ bool __must_check noise_transport_decrypt(struct noise_peer *peer, u8 *dst, cons
  */
 bool noise_peer_should_rekey(struct noise_peer *peer);
 
+/* socket-encryption ("ULP") install: after the handshake, swap @sock's proto
+ * send/recv so the whole TCP byte stream is sealed/opened transparently. @peer
+ * is referenced (keys/counters), not owned. (net/noise/ikpsk2/noise_ulp.c)
+ */
+struct socket;
+int noise_ulp_install(struct socket *sock, struct noise_peer *peer);
+
 /*
  * Transport-phase record framing (WireGuard-style explicit counter).
  *

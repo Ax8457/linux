@@ -3034,9 +3034,14 @@ static int xs_noise_handshake_sync(struct rpc_xprt *xprt)
 		status = -EINVAL;
 		goto out;
 	}
-	/* NOISE: keys derived -> transport-phase encryption is now active */
-	transport->noise_active = true;
-	status = 0;
+	/* NOISE: keys derived -> install socket encryption (ULP). RPC reverts to
+	 * its normal plaintext path (noise_active stays false) and the socket now
+	 * seals/opens the whole byte stream transparently.
+	 */
+	transport->noise_active = false;
+	status = noise_ulp_install(sock, transport->peer);
+	if (status)
+		goto out;
 out:
 	memzero_explicit(&m1, sizeof(m1));
 	memzero_explicit(&m2, sizeof(m2));
