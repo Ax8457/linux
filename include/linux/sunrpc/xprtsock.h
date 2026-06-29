@@ -62,11 +62,10 @@ struct sock_xprt {
 	struct work_struct	recv_worker;
 	struct mutex		recv_mutex;
 	struct completion	handshake_done;
-	/* NOISE noise_peer struct to store data of handshake */
-	struct noise_peer *peer;
-	/* NOISE transport-phase state: active once keys are derived + RX reassembly */
-	bool			noise_active;
-	struct noise_rx		noise_rx;
+	/* NOISE per-connection Noise IKpsk2 state (handshake + session keys);
+	 * transport-phase encryption is done by the socket ULP (noise_ulp.c).
+	 */
+	struct noise_peer	*peer;
 	struct sockaddr_storage	srcaddr;
 	unsigned short		srcport;
 	int			xprt_err;

@@ -45,11 +45,10 @@ struct svc_sock {
 
 	struct completion	sk_handshake_done;
 
-	/* NOISE per-connection Noise IKpsk2 state (handshake + session keys) */
+	/* NOISE per-connection Noise IKpsk2 state (handshake + session keys);
+	 * transport-phase encryption is done by the socket ULP (noise_ulp.c).
+	 */
 	struct noise_peer	*peer;
-	/* NOISE transport-phase: active once keys are derived + RX reassembly */
-	bool			noise_active;
-	struct noise_rx		noise_rx;
 
 	/* received data */
 	unsigned long		sk_maxpages;

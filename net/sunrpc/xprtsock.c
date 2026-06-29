@@ -428,208 +428,10 @@ xs_sock_recv_cmsg(struct socket *sock, unsigned int *msg_flags, int flags)
 	return ret;
 }
 
-/* NOISE: read up to @len bytes off the socket in one shot, honoring @flags */
-static int xs_noise_read_some(struct socket *sock, u8 *buf, size_t len, int flags)
-{
-	struct kvec iov = { .iov_base = buf, .iov_len = len };
-	struct msghdr m = { };
-
-	iov_iter_kvec(&m.msg_iter, ITER_DEST, &iov, 1, len);
-	return sock_recvmsg(sock, &m, flags);
-}
-
-/*
- * NOISE: read + decrypt the next sealed record into transport->noise_rx.pt.
- * Resumable: partial socket reads keep state in noise_rx across calls.
- * Returns 1 when a full plaintext record is ready, 0 on EOF, <0 on error/EAGAIN.
- */
-static int xs_noise_rx_fill(struct sock_xprt *transport, struct socket *sock,
-			    int flags)
-{
-	struct noise_rx *rx = &transport->noise_rx;
-	int n, ptlen;
-
-	while (rx->hdr_got < NOISE_REC_LEN_SIZE) {
-		n = xs_noise_read_some(sock, rx->hdr + rx->hdr_got,
-				       NOISE_REC_LEN_SIZE - rx->hdr_got, flags);
-		if (n <= 0)
-			return n;
-		rx->hdr_got += n;
-	}
-	if (!rx->body) {
-		rx->body_len = get_unaligned_be32(rx->hdr);
-		if (rx->body_len < NOISE_REC_CTR_SIZE + NOISE_AUTHTAG_LEN ||
-		    rx->body_len > RPC_MAX_FRAGMENT_SIZE + NOISE_REC_OVERHEAD) {
-			pr_warn_ratelimited("noise: client rx implausible frame length %u - unencrypted/garbage on the wire?\n",
-					    rx->body_len);
-			return -EMSGSIZE;
-		}
-		rx->body = kmalloc(rx->body_len, GFP_KERNEL);
-		if (!rx->body)
-			return -ENOMEM;
-		rx->body_got = 0;
-	}
-	while (rx->body_got < rx->body_len) {
-		n = xs_noise_read_some(sock, rx->body + rx->body_got,
-				       rx->body_len - rx->body_got, flags);
-		if (n <= 0)
-			return n;
-		rx->body_got += n;
-	}
-	rx->pt = kmalloc(rx->body_len, GFP_KERNEL);
-	if (!rx->pt)
-		return -ENOMEM;
-	ptlen = noise_record_open(transport->peer, rx->body, rx->body_len, rx->pt);
-	kfree(rx->body);
-	rx->body = NULL;
-	rx->hdr_got = 0;
-	rx->body_got = 0;
-	if (ptlen < 0) {
-		kfree(rx->pt);
-		rx->pt = NULL;
-		return -EBADMSG;
-	}
-	rx->pt_len = ptlen;
-	rx->pt_pos = 0;
-	return 1;
-}
-
-/* NOISE: serve the stream reader from decrypted records instead of the socket */
-static ssize_t xs_noise_recvmsg(struct sock_xprt *transport, struct socket *sock,
-				struct msghdr *msg, int flags, size_t seek)
-{
-	struct noise_rx *rx = &transport->noise_rx;
-	size_t got = 0;
-	int r;
-
-	if (seek)
-		iov_iter_advance(&msg->msg_iter, seek);
-
-	while (iov_iter_count(&msg->msg_iter)) {
-		if (rx->pt_pos < rx->pt_len) {
-			size_t n = copy_to_iter(rx->pt + rx->pt_pos,
-						rx->pt_len - rx->pt_pos,
-						&msg->msg_iter);
-			rx->pt_pos += n;
-			got += n;
-			if (rx->pt_pos >= rx->pt_len) {
-				kfree(rx->pt);
-				rx->pt = NULL;
-				rx->pt_len = rx->pt_pos = 0;
-			}
-			continue;
-		}
-		r = xs_noise_rx_fill(transport, sock, flags);
-		if (r <= 0) {
-			if (got)
-				break;
-			if (r == -EAGAIN || r == -EWOULDBLOCK || r == -ENOMEM)
-				return r;	/* transient: caller retries */
-			/* EOF or framing/decrypt error: the stream is desynced.
-			 * Drop reassembly state and ask for a clean shutdown
-			 * (reconnect + re-handshake) instead of spinning on it.
-			 */
-			noise_rx_reset(rx);
-			return -ESHUTDOWN;
-		}
-	}
-	return got > 0 ? got + seek : got;
-}
-
-/* NOISE: linearize [marker?][xdr] into @buf; returns total bytes written */
-static u32 xs_noise_linearize(rpc_fraghdr marker, struct xdr_buf *xdr, u8 *buf)
-{
-	u8 *p = buf;
-	size_t base, len;
-	unsigned int i;
-
-	if (marker) {
-		memcpy(p, &marker, sizeof(marker));
-		p += sizeof(marker);
-	}
-	memcpy(p, xdr->head[0].iov_base, xdr->head[0].iov_len);
-	p += xdr->head[0].iov_len;
-
-	base = xdr->page_base;
-	len = xdr->page_len;
-	i = base >> PAGE_SHIFT;
-	base &= ~PAGE_MASK;
-	while (len) {
-		size_t c = min_t(size_t, len, PAGE_SIZE - base);
-		void *kaddr = kmap_local_page(xdr->pages[i]);
-
-		memcpy(p, kaddr + base, c);
-		kunmap_local(kaddr);
-		p += c;
-		len -= c;
-		base = 0;
-		i++;
-	}
-	memcpy(p, xdr->tail[0].iov_base, xdr->tail[0].iov_len);
-	p += xdr->tail[0].iov_len;
-	return p - buf;
-}
-
-/* NOISE: send exactly @len bytes (blocking loop) */
-static int xs_noise_send_all(struct socket *sock, u8 *buf, size_t len)
-{
-	size_t sent = 0;
-
-	while (sent < len) {
-		struct kvec iov = { .iov_base = buf + sent, .iov_len = len - sent };
-		struct msghdr m = { };
-		int n = kernel_sendmsg(sock, &m, &iov, 1, len - sent);
-
-		if (n < 0)
-			return n;
-		if (n == 0)
-			return -EPIPE;
-		sent += n;
-	}
-	return 0;
-}
-
-/* NOISE: seal one RPC record ([marker][xdr]) and write it to the socket */
-static int xs_noise_send_record(struct sock_xprt *transport, rpc_fraghdr marker,
-				struct xdr_buf *xdr)
-{
-	u32 ptlen = (marker ? sizeof(marker) : 0) + xdr->len;
-	u8 *pt, *frame;
-	int wirelen, ret;
-
-	pt = kmalloc(ptlen, GFP_KERNEL);
-	if (!pt)
-		return -ENOMEM;
-	frame = kmalloc(ptlen + NOISE_REC_OVERHEAD, GFP_KERNEL);
-	if (!frame) {
-		kfree(pt);
-		return -ENOMEM;
-	}
-	xs_noise_linearize(marker, xdr, pt);
-	wirelen = noise_record_seal(transport->peer, frame, pt, ptlen);
-	if (wirelen < 0)
-		ret = wirelen;
-	else
-		ret = xs_noise_send_all(transport->sock, frame, wirelen);
-	kfree(pt);
-	kfree(frame);
-	return ret;
-}
-
 static ssize_t
 xs_sock_recvmsg(struct socket *sock, struct msghdr *msg, int flags, size_t seek)
 {
-	struct rpc_xprt *xprt;
-	struct sock_xprt *transport;
 	ssize_t ret;
-
-	/* NOISE: once keyed, serve decrypted transport-phase records */
-	xprt = sock->sk ? sock->sk->sk_user_data : NULL;
-	if (xprt) {
-		transport = container_of(xprt, struct sock_xprt, xprt);
-		if (transport->noise_active)
-			return xs_noise_recvmsg(transport, sock, msg, flags, seek);
-	}
 
 	if (seek != 0)
 		iov_iter_advance(&msg->msg_iter, seek);
@@ -1337,26 +1139,6 @@ static int xs_tcp_send_request(struct rpc_rqst *req)
 	if (!transport->inet)
 		return -ENOTCONN;
 
-	/* NOISE: seal the whole RPC record and send it as one transport message */
-	if (transport->noise_active) {
-		int status = xs_noise_send_record(transport, rm, xdr);
-
-		if (status == 0) {
-			req->rq_xmit_bytes_sent += msglen;
-			req->rq_bytes_sent = msglen;
-			transport->xmit.offset = 0;
-			/* NOISE: rekey by forcing a reconnect once the keypair has
-			 * reached a message/time threshold. The current record went
-			 * out under the old key; the reconnect re-handshakes and RPC
-			 * retries any in-flight request on the fresh connection.
-			 */
-			if (noise_peer_should_rekey(transport->peer))
-				xprt_force_disconnect(&transport->xprt);
-			return 0;
-		}
-		return status == -ENOMEM ? -EAGAIN : -ENOTCONN;
-	}
-
 	xs_pktdump("packet data:",
 				req->rq_svec->iov_base,
 				req->rq_svec->iov_len);
@@ -1520,10 +1302,6 @@ static void xs_reset_transport(struct sock_xprt *transport)
 	if (atomic_read(&transport->xprt.swapper))
 		sk_clear_memalloc(sk);
 
-	/* NOISE: a reconnect re-runs the handshake; drop stale transport state */
-	transport->noise_active = false;
-	noise_rx_reset(&transport->noise_rx);
-
 	tls_handshake_cancel(sk);
 
 	kernel_sock_shutdown(sock, SHUT_RDWR);
@@ -1601,8 +1379,7 @@ static void xs_destroy(struct rpc_xprt *xprt)
 	xs_close(xprt);
 	cancel_work_sync(&transport->recv_worker);
 	cancel_work_sync(&transport->error_worker);
-	/* NOISE release per-connection handshake/session state (NULL for non-Noise) */
-	noise_rx_reset(&transport->noise_rx);
+	/* NOISE: free the per-connection Noise session state */
 	kfree(transport->peer);
 	transport->peer = NULL;
 	xs_xprt_free(xprt);
@@ -3034,11 +2811,10 @@ static int xs_noise_handshake_sync(struct rpc_xprt *xprt)
 		status = -EINVAL;
 		goto out;
 	}
-	/* NOISE: keys derived -> install socket encryption (ULP). RPC reverts to
-	 * its normal plaintext path (noise_active stays false) and the socket now
-	 * seals/opens the whole byte stream transparently.
+	/* NOISE: keys derived -> install socket encryption (ULP). RPC keeps its
+	 * normal plaintext path; the socket now seals/opens the whole byte stream
+	 * transparently (forechannel and the shared NFSv4.1 backchannel alike).
 	 */
-	transport->noise_active = false;
 	status = noise_ulp_install(sock, transport->peer);
 	if (status)
 		goto out;
@@ -3649,39 +3425,6 @@ static void bc_free(struct rpc_task *task)
 	free_page((unsigned long)buf);
 }
 
-/*
- * NOISE: seal a backchannel Call with the connection's session keys.
- * The keys live on the server svc_sock (shared with the fore-channel replies),
- * and the call is sent on that same socket using the shared sending_counter, so
- * the client decrypts both directions with a single receiving_counter.
- * Returns the logical (marker + xdr) length on success, or <0 on error.
- */
-static int xs_noise_bc_send(struct svc_sock *svsk, rpc_fraghdr marker,
-			    struct xdr_buf *xdr)
-{
-	u32 ptlen = sizeof(marker) + xdr->len;
-	u8 *pt, *frame;
-	int wirelen, ret;
-
-	pt = kmalloc(ptlen, GFP_KERNEL);
-	if (!pt)
-		return -ENOMEM;
-	frame = kmalloc(ptlen + NOISE_REC_OVERHEAD, GFP_KERNEL);
-	if (!frame) {
-		kfree(pt);
-		return -ENOMEM;
-	}
-	xs_noise_linearize(marker, xdr, pt);
-	wirelen = noise_record_seal(svsk->peer, frame, pt, ptlen);
-	if (wirelen < 0)
-		ret = wirelen;
-	else
-		ret = xs_noise_send_all(svsk->sk_sock, frame, wirelen);
-	kfree(pt);
-	kfree(frame);
-	return ret == 0 ? (int)ptlen : ret;
-}
-
 static int bc_sendto(struct rpc_rqst *req)
 {
 	struct xdr_buf *xdr = &req->rq_snd_buf;
@@ -3695,20 +3438,9 @@ static int bc_sendto(struct rpc_rqst *req)
 	unsigned int sent = 0;
 	int err;
 
-	/* NOISE: seal the backchannel Call when this connection is Noise-secured */
-	if (req->rq_xprt->bc_xprt) {
-		struct svc_sock *svsk = container_of(req->rq_xprt->bc_xprt,
-						     struct svc_sock, sk_xprt);
-
-		if (svsk->noise_active && svsk->peer) {
-			int rc = xs_noise_bc_send(svsk, marker, xdr);
-
-			if (rc < 0)
-				return rc == -ENOMEM ? -EAGAIN : -ENOTCONN;
-			return rc;
-		}
-	}
-
+	/* NOISE: the NFSv4.1 backchannel shares the fore-channel socket, so it is
+	 * sealed transparently by that socket's Noise ULP - no special handling.
+	 */
 	req->rq_xtime = ktime_get();
 	err = xdr_alloc_bvec(xdr, rpc_task_gfp_mask());
 	if (err < 0)

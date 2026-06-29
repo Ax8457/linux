@@ -86,18 +86,16 @@ RPC-layer payload hooks (now bypassed, `noise_active` left false).
 | `xs_noise_send` | Send exactly N bytes (a handshake message) over the lower socket. |
 | `xs_noise_recv` | Block until exactly N bytes (a handshake message) are received. |
 
-### 2.3 Transport phase (send / receive / rekey)
-| Function | Description |
-|----------|-------------|
-| `xs_tcp_send_request` (MOD) | Send path; routes through the Noise record sealer when active, triggers rekey. |
-| `xs_noise_send_record` | Seal one RPC record and write it to the socket. |
-| `xs_noise_linearize` | Flatten the scattered `xdr_buf` (marker + head + pages + tail) into one buffer. |
-| `xs_noise_send_all` | Blocking loop to write all wire bytes. |
-| `xs_sock_recvmsg` (MOD) | Receive path; serves decrypted records when Noise is active. |
-| `xs_noise_recvmsg` | Serve the stream reader from decrypted plaintext records. |
-| `xs_noise_rx_fill` | Reassemble + decrypt the next record into the receive state. |
-| `xs_noise_read_some` | Non-blocking read of up to N bytes from the socket. |
-| `xs_noise_bc_send` | Backchannel send path sealed with Noise (callback direction). |
+### 2.3 Transport phase
+
+Transport-phase encryption is now done by the socket ULP (§1.5), not at the RPC
+layer. After the handshake the install call replaces the old per-record hooks,
+so the RPC send/receive paths are back to their stock plaintext form and the
+socket seals/opens transparently. The previous payload-model helpers
+(`xs_noise_send_record`, `xs_noise_recvmsg`, `xs_noise_rx_fill`,
+`xs_noise_linearize`, `xs_noise_send_all`, `xs_noise_read_some`, and the
+backchannel sealer `xs_noise_bc_send`) have been **removed**; the NFSv4.1
+backchannel shares the fore-channel socket and is encrypted by the same ULP.
 
 ---
 
@@ -118,16 +116,14 @@ RPC-layer payload hooks (now bypassed, `noise_active` left false).
 | `svc_noise_send` | Send exactly N bytes (a handshake message) over the socket. |
 | `svc_noise_recv` | Block until exactly N bytes (a handshake message) are received. |
 
-### 3.3 Transport phase (receive / send / rekey)
-| Function | Description |
-|----------|-------------|
-| `svc_tcp_sock_recvmsg` (MOD) | Receive path; serves decrypted records when Noise is active. |
-| `svc_noise_recvmsg` | Serve the server stream reader from decrypted records. |
-| `svc_noise_rx_fill` | Reassemble + decrypt the next record into the receive state. |
-| `svc_noise_read_some` | Non-blocking read of up to N bytes from the socket. |
-| `svc_noise_sendmsg` | Seal one reply record and write it; triggers rekey (drops the connection). |
-| `svc_noise_linearize` | Flatten the reply `xdr_buf` into one contiguous buffer. |
-| `svc_noise_send_all` | Blocking loop to write all wire bytes. |
+### 3.3 Transport phase
+
+As on the client, transport-phase encryption is now done by the socket ULP
+(§1.5). The previous payload-model helpers (`svc_noise_recvmsg`,
+`svc_noise_rx_fill`, `svc_noise_read_some`, `svc_noise_sendmsg`,
+`svc_noise_linearize`, `svc_noise_send_all`) have been **removed**, and
+`svc_tcp_sock_recvmsg` / `svc_tcp_sendmsg` are back to their stock plaintext
+form over the now-encrypting socket.
 
 ---
 
