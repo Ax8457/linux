@@ -18,11 +18,27 @@ Generic, side-agnostic building blocks called by both the client and the server.
 ### 1.2 Handshake state machine — `handshake.c`
 | Function | Description |
 |----------|-------------|
-| `noise_handshake_create_initiation` | Initiator: build handshake message 1 (`ikpsk2_msg1`). |
+| `noise_handshake_create_initiation` | Initiator: build handshake message 1 (`ikpsk2_msg1`); stamps the framing header with `NOISE_MSG_HANDSHAKE_INITIATION`. |
 | `handshake_consume_initiation` | Responder: validate message 1, recover the peer static key. |
-| `handshake_create_response` | Responder: build handshake message 2 (`ikpsk2_msg2`). |
+| `handshake_create_response` | Responder: build handshake message 2 (`ikpsk2_msg2`); stamps the framing header with `NOISE_MSG_HANDSHAKE_RESPONSE`. |
 | `handshake_consume_response` | Initiator: validate message 2. |
 | `begin_session` | Derive the directional session keys, reset counters, stamp the keypair birthdate. |
+
+### 1.2a Message framing header — `handshake.c`
+
+Every handshake message begins with a fixed 8-byte `struct noise_message_header`
+(`magic`, `type`, `version`, `reserved`), inspired by WireGuard's
+`struct message_header` / `enum message_type`. The receiver reads the header
+first and `switch`es on its type to route the message. The `magic` ("NOIS")
+distinguishes a Noise initiation from a plaintext RPC record marker / TLS on the
+shared TCP port (WireGuard owns its UDP socket and so needs no magic). The
+header is **framing only** — it is not mixed into the Noise transcript, so the
+handshake crypto is unchanged.
+
+| Function | Description |
+|----------|-------------|
+| `noise_message_header_set` | Stamp an outgoing header with the magic/version and a message type. |
+| `noise_message_classify` | Validate magic/version/reserved and return the message type (or `NOISE_MSG_INVALID`); the dispatch key, analogous to WireGuard's `SKB_TYPE_LE32()`. |
 
 ### 1.3 Cryptographic helpers — `noise_crypto.c`
 | Function | Description |
@@ -81,7 +97,7 @@ RPC-layer payload hooks (now bypassed, `noise_active` left false).
 ### 2.2 Handshake (initiator)
 | Function | Description |
 |----------|-------------|
-| `xs_noise_handshake_sync` | Drive the IKpsk2 initiator exchange (msg1 out, msg2 in), then derive keys. |
+| `xs_noise_handshake_sync` | Drive the IKpsk2 initiator exchange (msg1 out, msg2 in), then derive keys. Reads the msg2 framing header first and `switch`es on it: `RESPONSE` → consume; `ERROR` → refused (`-EACCES`); otherwise not Noise (`-EPROTO`). |
 | `xs_noise_setup_keys` | Install the client static identity and pre-shared key into the peer. |
 | `xs_noise_send` | Send exactly N bytes (a handshake message) over the lower socket. |
 | `xs_noise_recv` | Block until exactly N bytes (a handshake message) are received. |
@@ -111,10 +127,11 @@ backchannel shares the fore-channel socket and is encrypted by the same ULP.
 ### 3.2 Handshake (responder)
 | Function | Description |
 |----------|-------------|
-| `svc_noise_handshake` | Run the IKpsk2 responder (msg1 in, msg2 out), then derive keys. |
+| `svc_noise_handshake` | Run the IKpsk2 responder (msg1 in, msg2 out), then derive keys. Reads the msg1 framing header first and `switch`es on it: `INITIATION` → read the body and consume; otherwise refuse the connection (`-EPROTO`). Reading the 8-byte header before the body lets a non-Noise connection (plaintext RPC / TLS) be rejected before any crypto. |
 | `svc_noise_setup_keys` | Install the server static identity and pre-shared key into the peer. |
 | `svc_noise_send` | Send exactly N bytes (a handshake message) over the socket. |
 | `svc_noise_recv` | Block until exactly N bytes (a handshake message) are received. |
+| `svc_noise_send_error` | Best-effort header-only `NOISE_MSG_HANDSHAKE_ERROR` reply so a genuine Noise client can tell a refusal apart from a dropped connection. |
 
 ### 3.3 Transport phase
 

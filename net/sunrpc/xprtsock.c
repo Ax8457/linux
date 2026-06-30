@@ -2797,12 +2797,33 @@ static int xs_noise_handshake_sync(struct rpc_xprt *xprt)
 	if (status)
 		goto out;
 
-	/* msg2 : responder -> initiator */
-	status = xs_noise_recv(sock, &m2, sizeof(m2));
+	/* msg2 : responder -> initiator.
+	 *
+	 * Read the framing header first and dispatch on its type, mirroring the
+	 * responder. A header-only NOISE_MSG_HANDSHAKE_ERROR signals an explicit
+	 * refusal; anything else that is not a response means the server is not
+	 * speaking Noise on this port.
+	 */
+	status = xs_noise_recv(sock, &m2.header, sizeof(m2.header));
 	if (status)
 		goto out;
-	if (!handshake_consume_response(&m2, transport->peer)) {
+
+	switch (noise_message_classify(&m2.header)) {
+	case NOISE_MSG_HANDSHAKE_RESPONSE:
+		status = xs_noise_recv(sock, (u8 *)&m2 + sizeof(m2.header),
+				       sizeof(m2) - sizeof(m2.header));
+		if (status)
+			goto out;
+		if (!handshake_consume_response(&m2, transport->peer)) {
+			status = -EACCES;
+			goto out;
+		}
+		break;
+	case NOISE_MSG_HANDSHAKE_ERROR:
 		status = -EACCES;
+		goto out;
+	default:
+		status = -EPROTO;
 		goto out;
 	}
 

@@ -531,6 +531,19 @@ static int svc_noise_recv(struct socket *sock, void *buf, size_t len)
 	return ret == len ? 0 : -EIO;
 }
 
+/* svc_noise_send_error - best-effort reject notice to the initiator.
+ * Sends a header-only NOISE_MSG_HANDSHAKE_ERROR so a genuine Noise client can
+ * tell a refusal apart from a dropped connection. Errors are ignored: the
+ * connection is being torn down regardless.
+ */
+static void svc_noise_send_error(struct socket *sock)
+{
+	struct noise_message_header err;
+
+	noise_message_header_set(&err, NOISE_MSG_HANDSHAKE_ERROR);
+	svc_noise_send(sock, &err, sizeof(err));
+}
+
 /**
  * svc_noise_handshake - run the Noise IKpsk2 responder synchronously
  * @xprt: accepted transport endpoint with XPT_HANDSHAKE set
@@ -563,12 +576,34 @@ static void svc_noise_handshake(struct svc_xprt *xprt)
 	if (status)
 		goto out_restore;
 
-	/* msg1 : initiator -> responder */
-	status = svc_noise_recv(sock, &m1, sizeof(m1));
+	/* msg1 : initiator -> responder.
+	 *
+	 * Read the 8-byte framing header first, then dispatch on its type
+	 * (WireGuard-style switch). Reading the header before the body lets a
+	 * non-Noise connection (plaintext RPC / TLS sharing this port) be
+	 * rejected after 8 bytes, before touching any crypto.
+	 */
+	status = svc_noise_recv(sock, &m1.header, sizeof(m1.header));
 	if (status)
 		goto out_restore;
-	if (!handshake_consume_initiation(&m1, svsk->peer)) {
-		status = -EACCES;
+
+	switch (noise_message_classify(&m1.header)) {
+	case NOISE_MSG_HANDSHAKE_INITIATION:
+		/* read the rest of msg1 (everything after the header) */
+		status = svc_noise_recv(sock, (u8 *)&m1 + sizeof(m1.header),
+					sizeof(m1) - sizeof(m1.header));
+		if (status)
+			goto out_restore;
+		if (!handshake_consume_initiation(&m1, svsk->peer)) {
+			/* tell the initiator the handshake was refused */
+			svc_noise_send_error(sock);
+			status = -EACCES;
+			goto out_restore;
+		}
+		break;
+	default:
+		/* not a Noise initiation: refuse this connection */
+		status = -EPROTO;
 		goto out_restore;
 	}
 

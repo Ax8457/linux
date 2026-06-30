@@ -5,8 +5,45 @@
 *	Axel Biegalski
 */
 #include <linux/timekeeping.h>
+#include <asm/byteorder.h>
 
 #include "noise_crypto.h"
+
+/*
+ * Message framing helpers (WireGuard-inspired).
+ *
+ * noise_message_header_set() stamps the fixed magic/version onto an outgoing
+ * message; noise_message_classify() validates an incoming header and returns
+ * its type so the receiver can switch() on it. The header is framing only and
+ * is not part of the Noise transcript.
+ */
+void noise_message_header_set(struct noise_message_header *hdr, u8 type)
+{
+	hdr->magic = cpu_to_be32(NOISE_MSG_MAGIC);
+	hdr->type = type;
+	hdr->version = NOISE_MSG_VERSION;
+	hdr->reserved[0] = 0;
+	hdr->reserved[1] = 0;
+}
+
+enum noise_message_type noise_message_classify(const struct noise_message_header *hdr)
+{
+	if (be32_to_cpu(hdr->magic) != NOISE_MSG_MAGIC)
+		return NOISE_MSG_INVALID;
+	if (hdr->version != NOISE_MSG_VERSION)
+		return NOISE_MSG_INVALID;
+	if (hdr->reserved[0] | hdr->reserved[1])
+		return NOISE_MSG_INVALID;
+
+	switch (hdr->type) {
+	case NOISE_MSG_HANDSHAKE_INITIATION:
+	case NOISE_MSG_HANDSHAKE_RESPONSE:
+	case NOISE_MSG_HANDSHAKE_ERROR:
+		return hdr->type;
+	default:
+		return NOISE_MSG_INVALID;
+	}
+}
 
 
 
@@ -23,7 +60,10 @@ bool noise_handshake_create_initiation(struct ikpsk2_msg1 *m1, struct noise_hand
 	*/
 
 	init_handshake(handshake->chaining_key, handshake->hash_transcript, handshake->remote_static);
-	
+
+	/* stamp the framing header so the responder can route this as an initiation */
+	noise_message_header_set(&m1->header, NOISE_MSG_HANDSHAKE_INITIATION);
+
 	/*
 		e : C1 & H2
 		C1 = hkdf1(C0,E_pub_i)
@@ -158,7 +198,10 @@ bool handshake_create_response(struct ikpsk2_msg2 *m2, struct noise_peer *peer)
 {
 	u8 key[NOISE_SYMMETRIC_KEY_LEN];
 	bool ret = false;
-	
+
+	/* stamp the framing header so the initiator can route this as a response */
+	noise_message_header_set(&m2->header, NOISE_MSG_HANDSHAKE_RESPONSE);
+
 	/*
 		e: generate ephemerals + C4 & H5
 	*/
@@ -306,6 +349,8 @@ out:
 	return ret;
 }
 
+EXPORT_SYMBOL(noise_message_header_set);
+EXPORT_SYMBOL(noise_message_classify);
 EXPORT_SYMBOL(noise_handshake_create_initiation);
 EXPORT_SYMBOL(handshake_consume_initiation);
 EXPORT_SYMBOL(handshake_create_response);

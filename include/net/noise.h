@@ -66,6 +66,36 @@ enum rekey_limits {
 };
 
 /*
+ * Message framing header (WireGuard-inspired).
+ *
+ * Every handshake message on the wire begins with this fixed 8-byte header so
+ * the receiver can route it with a switch() on @type, exactly like WireGuard's
+ * struct message_header / message_type. Unlike WireGuard (which owns its UDP
+ * socket and so needs no magic), the Noise handshake shares the TCP port with
+ * plaintext RPC and TLS, so a @magic is added: it lets the responder tell a
+ * Noise initiation apart from an RPC record marker before touching any crypto.
+ *
+ * The header is framing only: it is NOT mixed into the Noise hash transcript,
+ * so the handshake crypto is unchanged on both ends.
+ */
+#define NOISE_MSG_MAGIC		0x4E4F4953u	/* "NOIS" (big-endian on wire) */
+#define NOISE_MSG_VERSION	1u
+
+enum noise_message_type {
+	NOISE_MSG_INVALID		= 0,
+	NOISE_MSG_HANDSHAKE_INITIATION	= 1,	/* initiator -> responder (msg1) */
+	NOISE_MSG_HANDSHAKE_RESPONSE	= 2,	/* responder -> initiator (msg2) */
+	NOISE_MSG_HANDSHAKE_ERROR	= 3,	/* responder -> initiator (reject) */
+};
+
+struct noise_message_header {
+	__be32	magic;		/* NOISE_MSG_MAGIC			*/
+	u8	type;		/* enum noise_message_type		*/
+	u8	version;	/* NOISE_MSG_VERSION			*/
+	u8	reserved[2];	/* must be zero				*/
+} __packed;
+
+/*
  * Structs
  */
 /* encrypt and decrypt data once the handshake is done */
@@ -123,16 +153,18 @@ struct noise_peer {
 /* handshake messages */
 /* m1 i -> r */
 struct ikpsk2_msg1 {
+	struct noise_message_header header;	/* type = NOISE_MSG_HANDSHAKE_INITIATION */
 	u8 unencrypted_ephemeral[NOISE_PUBLIC_KEY_LEN];
 	u8 encrypted_static[NOISE_PUBLIC_KEY_LEN + NOISE_AUTHTAG_LEN];
 	u8 encrypted_timestamp[NOISE_TIMESTAMP_LEN + NOISE_AUTHTAG_LEN];
-};
+} __packed;
 
 /* m2 r -> i */
 struct ikpsk2_msg2 {
+	struct noise_message_header header;	/* type = NOISE_MSG_HANDSHAKE_RESPONSE */
 	u8 ephemeral_public_key[NOISE_PUBLIC_KEY_LEN];
 	u8 encrypted_empty[NOISE_AUTHTAG_LEN];
-};
+} __packed;
 
 /* enc data */
 struct data {
@@ -144,6 +176,15 @@ struct data {
  * Public API
  */
 void ikpsk2_noise_init(void);
+
+/* message framing (net/noise/ikpsk2/handshake.c) */
+/* stamp @hdr with the magic/version and the given message @type */
+void noise_message_header_set(struct noise_message_header *hdr, u8 type);
+/* validate magic/version/reserved and return the message type, or
+ * NOISE_MSG_INVALID if the header is not a well-formed Noise message. The
+ * analog of WireGuard's SKB_TYPE_LE32() dispatch key.
+ */
+enum noise_message_type noise_message_classify(const struct noise_message_header *hdr);
 
 /* handshake (net/noise/ikpsk2/handshake.c) */
 bool noise_handshake_create_initiation(struct ikpsk2_msg1 *m1, struct noise_handshake *handshake);
