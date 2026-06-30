@@ -32,7 +32,7 @@ Every handshake message begins with a fixed 8-byte `struct noise_message_header`
 first and `switch`es on its type to route the message. The `magic` ("NOIS")
 distinguishes a Noise initiation from a plaintext RPC record marker / TLS on the
 shared TCP port (WireGuard owns its UDP socket and so needs no magic). The
-header is **framing only** — it is not mixed into the Noise transcript, so the
+header is **framing only**, it means it's not mixed into the Noise transcript, so the
 handshake crypto is unchanged.
 
 | Function | Description |
