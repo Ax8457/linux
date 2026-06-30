@@ -52,10 +52,9 @@ static int noise_ulp_read_some(struct sock *sk, struct noise_ulp_ctx *ctx,
 {
 	struct kvec iov = { .iov_base = buf, .iov_len = len };
 	struct msghdr m = { };
-	int addr_len = 0;
 
 	iov_iter_kvec(&m.msg_iter, ITER_DEST, &iov, 1, len);
-	return ctx->base->recvmsg(sk, &m, len, flags, &addr_len);
+	return ctx->base->recvmsg(sk, &m, len, flags);
 }
 
 /*
@@ -116,15 +115,12 @@ static int noise_ulp_rx_fill(struct sock *sk, struct noise_ulp_ctx *ctx,
 
 /* proto->recvmsg: serve the caller from decrypted plaintext records. */
 static int noise_ulp_recvmsg(struct sock *sk, struct msghdr *msg, size_t len,
-			     int flags, int *addr_len)
+			     int flags)
 {
 	struct noise_ulp_ctx *ctx = noise_ulp_ctx(sk);
 	struct noise_rx *rx = &ctx->rx;
 	size_t copied = 0;
 	int r;
-
-	if (addr_len)
-		*addr_len = 0;
 
 	while (iov_iter_count(&msg->msg_iter)) {
 		if (rx->pt_pos < rx->pt_len) {
