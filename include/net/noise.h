@@ -177,6 +177,20 @@ struct data {
  */
 void ikpsk2_noise_init(void);
 
+/* key management (net/noise/ikpsk2/noise_keys.c)
+ *
+ * A kernel-held keyring ".noise" holds the long-term secrets as "user" keys,
+ * provisioned from userspace with keyctl(1). ikpsk2_keyring_init/exit() are
+ * driven by the module load/unload; the lookups are used by the handshake.
+ */
+int ikpsk2_keyring_init(void);
+void ikpsk2_keyring_exit(void);
+/* copy exactly @len bytes of the "user" key @desc into @out (0 / -ENOKEY / -EINVAL) */
+int noise_key_lookup(const char *desc, u8 *out, size_t len);
+/* fetch the PSK keyed by @pubkey: description "noise:psk:<pubkey-lowercase-hex>" */
+int noise_psk_lookup(const u8 pubkey[NOISE_PUBLIC_KEY_LEN],
+		     u8 psk[NOISE_SYMMETRIC_KEY_LEN]);
+
 /* message framing (net/noise/ikpsk2/handshake.c) */
 /* stamp @hdr with the magic/version and the given message @type */
 void noise_message_header_set(struct noise_message_header *hdr, u8 type);

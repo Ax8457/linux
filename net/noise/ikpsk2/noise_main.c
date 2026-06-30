@@ -14,14 +14,25 @@
 
 static int __init noise_init(void)
 {
+	int ret;
+
 	printk(KERN_INFO "Custom module loaded with crypto functions ready.\n");
 	ikpsk2_noise_init();
+
+	/* keyring holding the long-term secrets (PSKs, static private keys) */
+	ret = ikpsk2_keyring_init();
+	if (ret) {
+		printk(KERN_ERR "IKpsk2 keyring init failed (%d).\n", ret);
+		return ret;
+	}
+
 	printk(KERN_INFO "IKpsk2 init ok.\n");
 	return 0;
 }
 
 static void __exit noise_exit(void)
 {
+	ikpsk2_keyring_exit();
 	printk(KERN_INFO "Custom module unloaded.\n");
 }
 

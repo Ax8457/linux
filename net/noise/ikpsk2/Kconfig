@@ -10,6 +10,9 @@ config NOISE_IKPSK2
 	# no Kconfig symbol to select for <crypto/blake2s.h>.
 	select CRYPTO_LIB_CURVE25519
 	select CRYPTO_LIB_CHACHA20POLY1305
+	# Kernel keyring used to hold the Noise long-term secrets (PSKs and
+	# static private keys), provisioned from userspace with keyctl(1).
+	select KEYS
 	default n
 	help
 	  Kernel-internal Noise IKpsk2 handshake and transport

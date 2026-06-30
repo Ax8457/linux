@@ -2651,73 +2651,54 @@ out_unlock:
 	current_restore_flags(pflags, PF_MEMALLOC);
 }
 
-/* NOISE hardcoded test keys.
- *
- * INSECURE placeholder for bring-up only. These are Curve25519 *private*
- * scalars; the matching public keys are derived at runtime so every keypair
- * is a valid Curve25519 keypair and the Diffie-Hellman results agree with a
- * server configured with the SAME server private key. The PSK is arbitrary
- * 32 bytes. Replace with proper provisioning (keyring / mount options) later.
- */
-static const u8 xs_noise_client_static_private[NOISE_PUBLIC_KEY_LEN] = {
-	0x60, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
-	0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
-	0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
-	0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x5f,
-};
-static const u8 xs_noise_server_static_private[NOISE_PUBLIC_KEY_LEN] = {
-	0x70, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27,
-	0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e, 0x2f,
-	0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37,
-	0x38, 0x39, 0x3a, 0x3b, 0x3c, 0x3d, 0x3e, 0x4f,
-};
-static const u8 xs_noise_psk[NOISE_SYMMETRIC_KEY_LEN] = {
-	0xc0, 0xc1, 0xc2, 0xc3, 0xc4, 0xc5, 0xc6, 0xc7,
-	0xc8, 0xc9, 0xca, 0xcb, 0xcc, 0xcd, 0xce, 0xcf,
-	0xd0, 0xd1, 0xd2, 0xd3, 0xd4, 0xd5, 0xd6, 0xd7,
-	0xd8, 0xd9, 0xda, 0xdb, 0xdc, 0xdd, 0xde, 0xdf,
-};
-
 /* NOISE shared local static identity (single-client model for now) */
 static struct noise_identity xs_noise_identity;
 
 /*
- * xs_noise_setup_keys - install the (hardcoded) static identity, remote static
- * public key and PSK into the handshake state before the IKpsk2 exchange.
+ * xs_noise_setup_keys - install the static identity, remote static public key
+ * and PSK into the handshake state before the IKpsk2 exchange. All three are
+ * loaded from the kernel keyring (see net/noise/ikpsk2/noise_keys.c):
  *
- * Both the local keypair and the remote (server) static public key are derived
- * from clamped private scalars, so the keypairs are valid and DH-consistent
- * with a server that uses the same server private scalar.
+ *   noise:priv:client   our static private scalar
+ *   noise:pub:server    the server static public key
+ *   noise:psk:<our-pub> the PSK shared with the server, keyed by our own
+ *                       static public key (the same description the server
+ *                       looks up once it recovers it from msg1).
  */
 static int xs_noise_setup_keys(struct noise_peer *peer)
 {
 	struct noise_handshake *hs = &peer->handshake;
-	u8 server_private[NOISE_PUBLIC_KEY_LEN];
-	int ret = -EINVAL;
+	u8 priv[NOISE_PUBLIC_KEY_LEN];
+	int ret;
 
-	/* local static keypair: clamp the private, derive the public */
-	memcpy(xs_noise_identity.static_private, xs_noise_client_static_private,
-	       NOISE_PUBLIC_KEY_LEN);
+	/* local static keypair: load the private, clamp it, derive the public */
+	ret = noise_key_lookup("noise:priv:client", priv, sizeof(priv));
+	if (ret)
+		return ret;
+	memcpy(xs_noise_identity.static_private, priv, NOISE_PUBLIC_KEY_LEN);
 	curve25519_clamp_secret(xs_noise_identity.static_private);
 	if (!curve25519_generate_public(xs_noise_identity.static_public,
-					xs_noise_identity.static_private))
-		return ret;
+					xs_noise_identity.static_private)) {
+		ret = -EINVAL;
+		goto out;
+	}
 	hs->static_identity = &xs_noise_identity;
 
-	/* remote (server) static public: derive from the shared test server
-	 * private so it is a valid point and DH matches the server side
-	 */
-	memcpy(server_private, xs_noise_server_static_private,
-	       NOISE_PUBLIC_KEY_LEN);
-	curve25519_clamp_secret(server_private);
-	if (!curve25519_generate_public(hs->remote_static, server_private))
+	/* remote (server) static public key */
+	ret = noise_key_lookup("noise:pub:server", hs->remote_static,
+			       NOISE_PUBLIC_KEY_LEN);
+	if (ret)
 		goto out;
 
-	memcpy(hs->psk, xs_noise_psk, NOISE_SYMMETRIC_KEY_LEN);
+	/* PSK shared with the server, keyed by our own static public key */
+	ret = noise_psk_lookup(xs_noise_identity.static_public, hs->psk);
+	if (ret)
+		goto out;
+
 	hs->state = HANDSHAKE_ZEROED;
 	ret = 0;
 out:
-	memzero_explicit(server_private, sizeof(server_private));
+	memzero_explicit(priv, sizeof(priv));
 	return ret;
 }
 

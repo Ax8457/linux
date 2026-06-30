@@ -458,51 +458,41 @@ module_param(svc_noise, bool, 0644);
 MODULE_PARM_DESC(svc_noise,
 		 "Expect a Noise IKpsk2 handshake on accepted TCP connections");
 
-/* NOISE hardcoded test keys.
- *
- * INSECURE placeholder for bring-up only. These MUST match the client values
- * in net/sunrpc/xprtsock.c: the server static private is the same scalar the
- * client used to derive the server's static public, so the Diffie-Hellman
- * results agree, and the PSK is the same arbitrary 32 bytes. The client's
- * static public is recovered from msg1 by handshake_consume_initiation(), so
- * the server does not need the client private key.
- */
-static const u8 svc_noise_server_static_private[NOISE_PUBLIC_KEY_LEN] = {
-	0x70, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27,
-	0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e, 0x2f,
-	0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37,
-	0x38, 0x39, 0x3a, 0x3b, 0x3c, 0x3d, 0x3e, 0x4f,
-};
-static const u8 svc_noise_psk[NOISE_SYMMETRIC_KEY_LEN] = {
-	0xc0, 0xc1, 0xc2, 0xc3, 0xc4, 0xc5, 0xc6, 0xc7,
-	0xc8, 0xc9, 0xca, 0xcb, 0xcc, 0xcd, 0xce, 0xcf,
-	0xd0, 0xd1, 0xd2, 0xd3, 0xd4, 0xd5, 0xd6, 0xd7,
-	0xd8, 0xd9, 0xda, 0xdb, 0xdc, 0xdd, 0xde, 0xdf,
-};
-
 /* NOISE shared local static identity (single-client model for now) */
 static struct noise_identity svc_noise_identity;
 
 /*
- * svc_noise_setup_keys - install the server static identity and PSK before the
- * IKpsk2 responder exchange. The remote (client) static public key is filled in
- * by handshake_consume_initiation() from the decrypted msg1.
+ * svc_noise_setup_keys - install the server static identity before the IKpsk2
+ * responder exchange. The server static private key is loaded from the kernel
+ * keyring ("noise:priv:server"); the per-client PSK is NOT set here but is
+ * selected after msg1 by svc_noise_handshake() once the client static public
+ * key is known (see noise_psk_lookup()). The remote (client) static public key
+ * itself is filled in by handshake_consume_initiation() from the decrypted msg1.
  */
 static int svc_noise_setup_keys(struct noise_peer *peer)
 {
 	struct noise_handshake *hs = &peer->handshake;
+	u8 priv[NOISE_PUBLIC_KEY_LEN];
+	int ret;
 
-	memcpy(svc_noise_identity.static_private,
-	       svc_noise_server_static_private, NOISE_PUBLIC_KEY_LEN);
+	ret = noise_key_lookup("noise:priv:server", priv, sizeof(priv));
+	if (ret)
+		return ret;
+
+	memcpy(svc_noise_identity.static_private, priv, NOISE_PUBLIC_KEY_LEN);
 	curve25519_clamp_secret(svc_noise_identity.static_private);
 	if (!curve25519_generate_public(svc_noise_identity.static_public,
-					svc_noise_identity.static_private))
-		return -EINVAL;
+					svc_noise_identity.static_private)) {
+		ret = -EINVAL;
+		goto out;
+	}
 
 	hs->static_identity = &svc_noise_identity;
-	memcpy(hs->psk, svc_noise_psk, NOISE_SYMMETRIC_KEY_LEN);
 	hs->state = HANDSHAKE_ZEROED;
-	return 0;
+	ret = 0;
+out:
+	memzero_explicit(priv, sizeof(priv));
+	return ret;
 }
 
 /* svc_noise_send - send exactly @len bytes over the TCP socket */
@@ -596,6 +586,16 @@ static void svc_noise_handshake(struct svc_xprt *xprt)
 			goto out_restore;
 		if (!handshake_consume_initiation(&m1, svsk->peer)) {
 			/* tell the initiator the handshake was refused */
+			svc_noise_send_error(sock);
+			status = -EACCES;
+			goto out_restore;
+		}
+		/* per-client PSK: now that msg1 has revealed the client static
+		 * public key, select the matching PSK from the keyring. An
+		 * unknown (or revoked) client has no entry and is refused.
+		 */
+		if (noise_psk_lookup(svsk->peer->handshake.remote_static,
+				     svsk->peer->handshake.psk)) {
 			svc_noise_send_error(sock);
 			status = -EACCES;
 			goto out_restore;

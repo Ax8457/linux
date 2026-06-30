@@ -80,6 +80,27 @@ RPC-layer payload hooks (now bypassed, `noise_active` left false).
 | `noise_ulp_read_some` | Read ciphertext from the lower (base) socket. |
 | `noise_ulp_close` | Restore the base proto, free the per-socket context, then close. |
 
+### 1.6 Key management — `noise_keys.c`
+
+A kernel-held keyring `.noise` holds the long-term secrets as `user` keys,
+provisioned from userspace with `keyctl(1)`; the handshake looks them up by
+description. This replaces the previous hardcoded test keys on both sides. The
+PSK is keyed by the **client** static public key (lowercase hex, no separator),
+exactly like WireGuard keys a peer's preshared key by its public key.
+
+| Key description | Holds |
+|-----------------|-------|
+| `noise:priv:server` | server static private scalar (32 B) |
+| `noise:priv:client` | client static private scalar (32 B) |
+| `noise:pub:server` | server static public key (32 B) |
+| `noise:psk:<client-pub-hex>` | pre-shared key for that client (32 B) |
+
+| Function | Description |
+|----------|-------------|
+| `ikpsk2_keyring_init` / `ikpsk2_keyring_exit` | Allocate / release the `.noise` keyring at module load/unload; exposes its serial via the read-only `keyring_serial` module parameter. |
+| `noise_key_lookup` | Copy exactly N bytes of a `user` key payload by description (`0` / `-ENOKEY` / `-EINVAL`). |
+| `noise_psk_lookup` | Fetch the PSK keyed by a static public key (`noise:psk:<hex>`); used by the responder after msg1 and by the initiator under its own public key. |
+
 ---
 
 ## 2. Client side — `net/sunrpc/xprtsock.c`
@@ -98,7 +119,7 @@ RPC-layer payload hooks (now bypassed, `noise_active` left false).
 | Function | Description |
 |----------|-------------|
 | `xs_noise_handshake_sync` | Drive the IKpsk2 initiator exchange (msg1 out, msg2 in), then derive keys. Reads the msg2 framing header first and `switch`es on it: `RESPONSE` → consume; `ERROR` → refused (`-EACCES`); otherwise not Noise (`-EPROTO`). |
-| `xs_noise_setup_keys` | Install the client static identity and pre-shared key into the peer. |
+| `xs_noise_setup_keys` | Load the client static private key, the server static public key and the PSK from the `.noise` keyring (§1.6) into the peer. |
 | `xs_noise_send` | Send exactly N bytes (a handshake message) over the lower socket. |
 | `xs_noise_recv` | Block until exactly N bytes (a handshake message) are received. |
 
@@ -128,7 +149,7 @@ backchannel shares the fore-channel socket and is encrypted by the same ULP.
 | Function | Description |
 |----------|-------------|
 | `svc_noise_handshake` | Run the IKpsk2 responder (msg1 in, msg2 out), then derive keys. Reads the msg1 framing header first and `switch`es on it: `INITIATION` → read the body and consume; otherwise refuse the connection (`-EPROTO`). Reading the 8-byte header before the body lets a non-Noise connection (plaintext RPC / TLS) be rejected before any crypto. |
-| `svc_noise_setup_keys` | Install the server static identity and pre-shared key into the peer. |
+| `svc_noise_setup_keys` | Load the server static private key from the `.noise` keyring (§1.6); the per-client PSK is selected later, after msg1 reveals the client static key. |
 | `svc_noise_send` | Send exactly N bytes (a handshake message) over the socket. |
 | `svc_noise_recv` | Block until exactly N bytes (a handshake message) are received. |
 | `svc_noise_send_error` | Best-effort header-only `NOISE_MSG_HANDSHAKE_ERROR` reply so a genuine Noise client can tell a refusal apart from a dropped connection. |
