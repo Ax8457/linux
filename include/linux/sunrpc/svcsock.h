@@ -12,6 +12,7 @@
 
 #include <linux/sunrpc/svc.h>
 #include <linux/sunrpc/svc_xprt.h>
+#include <linux/workqueue.h>
 /* NOISE pull in struct noise_peer for the per-connection handshake state */
 #include <net/noise.h>
 
@@ -49,6 +50,11 @@ struct svc_sock {
 	 * transport-phase encryption is done by the socket ULP (noise_ulp.c).
 	 */
 	struct noise_peer	*peer;
+	/* NOISE the Noise responder handshake runs here (off the nfsd service
+	 * threads) so its blocking reads and Curve25519 work cannot starve the
+	 * RPC service pool.
+	 */
+	struct work_struct	noise_hs_work;
 
 	/* received data */
 	unsigned long		sk_maxpages;

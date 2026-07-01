@@ -25,6 +25,7 @@
 #include <linux/module.h>
 #include <linux/errno.h>
 #include <linux/fcntl.h>
+#include <linux/workqueue.h>
 #include <linux/net.h>
 #include <linux/in.h>
 #include <linux/inet.h>
@@ -410,7 +411,11 @@ static void svc_data_ready(struct sock *sk)
 		rmb();
 		svsk->sk_odata(sk);
 		trace_svcsock_data_ready(&svsk->sk_xprt, 0);
-		if (test_bit(XPT_HANDSHAKE, &svsk->sk_xprt.xpt_flags))
+		/* NOISE also suppress while the async Noise handshake worker
+		 * owns the socket, so no service thread races it on recv.
+		 */
+		if (test_bit(XPT_HANDSHAKE, &svsk->sk_xprt.xpt_flags) ||
+		    test_bit(XPT_NOISE_HS, &svsk->sk_xprt.xpt_flags))
 			return;
 		if (!test_and_set_bit(XPT_DATA, &svsk->sk_xprt.xpt_flags))
 			svc_xprt_enqueue(&svsk->sk_xprt);
@@ -457,6 +462,12 @@ static bool svc_noise;
 module_param(svc_noise, bool, 0644);
 MODULE_PARM_DESC(svc_noise,
 		 "Expect a Noise IKpsk2 handshake on accepted TCP connections");
+
+/* NOISE workqueue running the Noise responder handshake off the nfsd service
+ * threads. Created in svc_init_xprt_sock(); bounded so a handshake flood cannot
+ * spawn unlimited workers (a per-source rate limiter tightens this further).
+ */
+static struct workqueue_struct *noise_hs_wq;
 
 /* NOISE shared local static identity (single-client model for now) */
 static struct noise_identity svc_noise_identity;
@@ -633,7 +644,11 @@ out_restore:
 	if (status)
 		goto out_close;
 
-	/* Mark the transport ready for RPC traffic */
+	/* Mark the transport ready for RPC traffic. Clear both handshake bits:
+	 * XPT_NOISE_HS re-enables the data path after the async worker, and
+	 * XPT_HANDSHAKE covers the inline fallback path (workqueue unavailable).
+	 */
+	clear_bit(XPT_NOISE_HS, &xprt->xpt_flags);
 	clear_bit(XPT_HANDSHAKE, &xprt->xpt_flags);
 	set_bit(XPT_DATA, &xprt->xpt_flags);
 	svc_xprt_enqueue(xprt);
@@ -642,9 +657,24 @@ out_restore:
 out_close:
 	pr_debug("svc: %p Noise handshake failed (%d)\n", xprt, status);
 	set_bit(XPT_CLOSE, &xprt->xpt_flags);
+	clear_bit(XPT_NOISE_HS, &xprt->xpt_flags);
 	clear_bit(XPT_HANDSHAKE, &xprt->xpt_flags);
 	set_bit(XPT_DATA, &xprt->xpt_flags);
 	svc_xprt_enqueue(xprt);
+}
+
+/* NOISE svc_noise_handshake_work - run the responder handshake on a workqueue.
+ * A reference on the xprt is held by the caller (svc_tcp_handshake) for the
+ * lifetime of this work and dropped here, so the svc_sock (which embeds this
+ * work item and the socket) cannot be freed while the handshake runs.
+ */
+static void svc_noise_handshake_work(struct work_struct *work)
+{
+	struct svc_sock *svsk = container_of(work, struct svc_sock, noise_hs_work);
+	struct svc_xprt *xprt = &svsk->sk_xprt;
+
+	svc_noise_handshake(xprt);
+	svc_xprt_put(xprt);
 }
 
 /**
@@ -688,9 +718,36 @@ static void svc_tcp_handshake(struct svc_xprt *xprt)
 	};
 	int ret;
 
-	/* NOISE run the in-kernel Noise responder instead of the TLS upcall */
+	/* NOISE run the in-kernel Noise responder instead of the TLS upcall.
+	 *
+	 * The responder does blocking reads (bounded by SVC_HANDSHAKE_TO) and
+	 * Curve25519 work, so run it on a workqueue rather than inline: this
+	 * frees the nfsd service thread immediately and keeps a handshake flood
+	 * from starving the (small, fixed) RPC service pool.
+	 *
+	 * XPT_NOISE_HS keeps svc_data_ready() from enqueuing while the worker
+	 * owns the socket; XPT_HANDSHAKE is cleared so svc_xprt_ready() does not
+	 * consider the xprt "ready" and re-dispatch it (which would busy-spin a
+	 * service thread). A reference is taken for the work item.
+	 */
 	if (svc_noise) {
-		svc_noise_handshake(xprt);
+		if (noise_hs_wq) {
+			set_bit(XPT_NOISE_HS, &xprt->xpt_flags);
+			clear_bit(XPT_HANDSHAKE, &xprt->xpt_flags);
+			svc_xprt_get(xprt);
+			INIT_WORK(&svsk->noise_hs_work,
+				  svc_noise_handshake_work);
+			if (!queue_work(noise_hs_wq, &svsk->noise_hs_work)) {
+				/* already queued (should not happen): undo ref */
+				svc_xprt_put(xprt);
+			}
+		} else {
+			/* workqueue unavailable: run inline (blocks this
+			 * thread, the pre-async behaviour) so the connection
+			 * still works, just without the DoS isolation.
+			 */
+			svc_noise_handshake(xprt);
+		}
 		return;
 	}
 
@@ -1546,6 +1603,17 @@ static struct svc_xprt_class svc_tcp_class = {
 
 void svc_init_xprt_sock(void)
 {
+	/* NOISE workqueue for the async Noise responder handshake. WQ_UNBOUND so
+	 * the blocking/CPU-bound work is spread across CPUs; a bounded max_active
+	 * caps concurrent handshake workers so a flood cannot exhaust memory with
+	 * kernel threads. If this fails the handshake falls back to running
+	 * inline (see svc_tcp_handshake()).
+	 */
+	noise_hs_wq = alloc_workqueue("nfsd_noise_hs", WQ_UNBOUND, 64);
+	if (!noise_hs_wq)
+		pr_warn("svc: Noise handshake workqueue alloc failed; "
+			"handshakes will run inline on service threads\n");
+
 	svc_reg_xprt_class(&svc_tcp_class);
 	svc_reg_xprt_class(&svc_udp_class);
 }
@@ -1554,6 +1622,11 @@ void svc_cleanup_xprt_sock(void)
 {
 	svc_unreg_xprt_class(&svc_tcp_class);
 	svc_unreg_xprt_class(&svc_udp_class);
+
+	if (noise_hs_wq) {
+		destroy_workqueue(noise_hs_wq);
+		noise_hs_wq = NULL;
+	}
 }
 
 static void svc_tcp_init(struct svc_sock *svsk, struct svc_serv *serv)

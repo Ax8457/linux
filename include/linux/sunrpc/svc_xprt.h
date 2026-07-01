@@ -107,6 +107,12 @@ enum {
 	XPT_RPCB_UNREG,		/* transport that needs unregistering
 				 * with rpcbind (TCP, UDP) on destroy
 				 */
+	XPT_NOISE_HS,		/* NOISE async Noise handshake in progress on a
+				 * workqueue: suppresses data-ready enqueue while
+				 * the worker owns the socket, but (unlike
+				 * XPT_HANDSHAKE) does not make the xprt "ready",
+				 * so it is not re-dispatched to a service thread.
+				 */
 };
 
 /*
