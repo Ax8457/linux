@@ -126,7 +126,7 @@ bool handshake_consume_initiation(struct ikpsk2_msg1 *m1, struct noise_peer *pee
 	//for the moment single client model
 	struct noise_handshake *handshake = &peer->handshake;
 	bool ret = false;
-
+	bool replay_attack;
 	u8 chaining_key[NOISE_HASH_LEN];
 	u8 hash_transcript[NOISE_HASH_LEN];
 	u8 s[NOISE_PUBLIC_KEY_LEN];
@@ -174,6 +174,11 @@ bool handshake_consume_initiation(struct ikpsk2_msg1 *m1, struct noise_peer *pee
 	if (!message_decrypt(t, m1->encrypted_timestamp, NOISE_TIMESTAMP_LEN + NOISE_AUTHTAG_LEN,key,hash_transcript)){
 		goto out;
 	}
+
+	//mitigate replay attack
+	replay_attack = memcmp(t, handshake->latest_timestamp, NOISE_TIMESTAMP_LEN) <= 0;
+	if (replay_attack)
+		goto out;
 
 	/*
 		Update peer
