@@ -177,8 +177,8 @@ bool handshake_consume_initiation(struct ikpsk2_msg1 *m1, struct noise_peer *pee
 
 	//mitigate replay attack
 	replay_attack = memcmp(t, handshake->latest_timestamp, NOISE_TIMESTAMP_LEN) <= 0;
-	if (replay_attack)
-		goto out;
+	if (replay_attack){ goto out; }
+		
 
 	/*
 		Update peer
