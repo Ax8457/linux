@@ -8,6 +8,7 @@
 #include <asm/byteorder.h>
 
 #include "noise_crypto.h"
+#include "cookie.h"
 
 /*
  * Message framing helpers (WireGuard-inspired).
@@ -110,6 +111,13 @@ bool noise_handshake_create_initiation(struct ikpsk2_msg1 *m1, struct noise_hand
 	tai64n_now(timestamp);
 	message_encrypt(m1->encrypted_timestamp, timestamp, NOISE_TIMESTAMP_LEN, key, handshake->hash_transcript);
 
+	/* mac1: cheap keyed tag over the whole message so the responder can drop
+	 * forgeries before Curve25519. Keyed by the responder (server) static
+	 * public key, which the initiator holds as remote_static. Must be last,
+	 * after every other msg1 field is populated.
+	 */
+	noise_mac1_stamp(m1, handshake->remote_static);
+
 	//update state and bool
 	handshake->state = HANDSHAKE_CREATED_INITIATION;
 	ret = true;
@@ -132,6 +140,13 @@ bool handshake_consume_initiation(struct ikpsk2_msg1 *m1, struct noise_peer *pee
 	u8 e[NOISE_PUBLIC_KEY_LEN];
 	u8 t[NOISE_TIMESTAMP_LEN];
 	u8 key[NOISE_SYMMETRIC_KEY_LEN];
+
+	/* mac1: reject forged/garbage msg1 with a single keyed hash BEFORE any
+	 * Curve25519. Keyed by our own (responder) static public key. This is the
+	 * cheap DoS gate; real authentication is still the PSK + static-key DH below.
+	 */
+	if (!noise_mac1_verify(m1, peer->handshake.static_identity->static_public))
+		goto out;
 
 	/*
 		H1

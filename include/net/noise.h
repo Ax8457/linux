@@ -81,6 +81,17 @@ enum rekey_limits {
 #define NOISE_MSG_MAGIC		0x4E4F4953u	/* "NOIS" (big-endian on wire) */
 #define NOISE_MSG_VERSION	1u
 
+/* mac1: a cheap keyed-BLAKE2s DoS gate appended to msg1 (net/noise/ikpsk2/cookie.c).
+ * The key is derived from the responder (server) static public key, so the
+ * responder can drop forged/garbage initiations with a single hash before
+ * spending any Curve25519. WireGuard-inspired, but mac1 only: the mac2/cookie
+ * (return-routability) part is omitted because this transport is TCP, whose
+ * 3-way handshake already proves the peer's source address. Like the framing
+ * header, mac1 is outer framing and is NOT mixed into the Noise transcript.
+ */
+#define NOISE_MAC1_LABEL_LEN	8	/* "mac1----" (no NUL) */
+#define NOISE_MAC1_LEN		16
+
 enum noise_message_type {
 	NOISE_MSG_INVALID		= 0,
 	NOISE_MSG_HANDSHAKE_INITIATION	= 1,	/* initiator -> responder (msg1) */
@@ -157,6 +168,7 @@ struct ikpsk2_msg1 {
 	u8 unencrypted_ephemeral[NOISE_PUBLIC_KEY_LEN];
 	u8 encrypted_static[NOISE_PUBLIC_KEY_LEN + NOISE_AUTHTAG_LEN];
 	u8 encrypted_timestamp[NOISE_TIMESTAMP_LEN + NOISE_AUTHTAG_LEN];
+	u8 mac1[NOISE_MAC1_LEN];		/* keyed-BLAKE2s over all preceding bytes */
 } __packed;
 
 /* m2 r -> i */
