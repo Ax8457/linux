@@ -611,6 +611,19 @@ static void svc_noise_handshake(struct svc_xprt *xprt)
 			status = -EACCES;
 			goto out_restore;
 		}
+		/* anti-replay: the client is now authenticated (PSK found), so
+		 * check the msg1 timestamp against the persistent per-client
+		 * record (keyed by static pubkey). A replayed msg1 arriving on a
+		 * new connection carries a timestamp <= the last one we accepted
+		 * from this client and is refused. Doing this only after the PSK
+		 * check keeps forged/unknown pubkeys from populating the table.
+		 */
+		if (!noise_client_check_ts(svsk->peer->handshake.remote_static,
+					   svsk->peer->handshake.latest_timestamp)) {
+			svc_noise_send_error(sock);
+			status = -EACCES;
+			goto out_restore;
+		}
 		break;
 	default:
 		/* not a Noise initiation: refuse this connection */

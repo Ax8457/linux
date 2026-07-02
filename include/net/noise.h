@@ -62,7 +62,7 @@ enum transport_limits {
  */
 enum rekey_limits {
 	REKEY_AFTER_MESSAGES = 1ULL << 60,
-	REKEY_AFTER_TIME = 3600,	/* seconds (1 hour) */
+	REKEY_AFTER_TIME = 360,	/* seconds (1 hour) */
 };
 
 /*
@@ -190,6 +190,12 @@ int noise_key_lookup(const char *desc, u8 *out, size_t len);
 /* fetch the PSK keyed by @pubkey: description "noise:psk:<pubkey-lowercase-hex>" */
 int noise_psk_lookup(const u8 pubkey[NOISE_PUBLIC_KEY_LEN],
 		     u8 psk[NOISE_SYMMETRIC_KEY_LEN]);
+/* anti-replay: true iff @timestamp is strictly newer than the last accepted for
+ * @pubkey (advancing the stored value). Persistent across connections, keyed by
+ * pubkey. Call only after the client is authenticated (PSK found).
+ */
+bool noise_client_check_ts(const u8 pubkey[NOISE_PUBLIC_KEY_LEN],
+			   const u8 timestamp[NOISE_TIMESTAMP_LEN]);
 
 /* message framing (net/noise/ikpsk2/handshake.c) */
 /* stamp @hdr with the magic/version and the given message @type */

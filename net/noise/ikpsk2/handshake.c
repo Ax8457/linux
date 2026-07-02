@@ -126,7 +126,6 @@ bool handshake_consume_initiation(struct ikpsk2_msg1 *m1, struct noise_peer *pee
 	//for the moment single client model
 	struct noise_handshake *handshake = &peer->handshake;
 	bool ret = false;
-	bool replay_attack;
 	u8 chaining_key[NOISE_HASH_LEN];
 	u8 hash_transcript[NOISE_HASH_LEN];
 	u8 s[NOISE_PUBLIC_KEY_LEN];
@@ -175,10 +174,12 @@ bool handshake_consume_initiation(struct ikpsk2_msg1 *m1, struct noise_peer *pee
 		goto out;
 	}
 
-	//mitigate replay attack
-	replay_attack = memcmp(t, handshake->latest_timestamp, NOISE_TIMESTAMP_LEN) <= 0;
-	if (replay_attack){ goto out; }
-		
+	/* Replay defense is NOT done here: this per-connection handshake struct is
+	 * freshly zeroed for every connection, so it cannot remember a client's
+	 * previous timestamp. The recovered timestamp is stored below and checked
+	 * by the caller against a persistent, per-pubkey record (noise_client_check_ts)
+	 * once the client has been authenticated (PSK found). See svc_noise_handshake().
+	 */
 
 	/*
 		Update peer
