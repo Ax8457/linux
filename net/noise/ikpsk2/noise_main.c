@@ -26,12 +26,16 @@ static int __init noise_init(void)
 		return ret;
 	}
 
+	/* per-source handshake rate limiter (starts its GC timer) */
+	noise_ratelimiter_init();
+
 	printk(KERN_INFO "IKpsk2 init ok.\n");
 	return 0;
 }
 
 static void __exit noise_exit(void)
 {
+	noise_ratelimiter_exit();
 	ikpsk2_keyring_exit();
 	printk(KERN_INFO "Custom module unloaded.\n");
 }

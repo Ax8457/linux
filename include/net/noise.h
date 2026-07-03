@@ -209,6 +209,17 @@ int noise_psk_lookup(const u8 pubkey[NOISE_PUBLIC_KEY_LEN],
 bool noise_client_check_ts(const u8 pubkey[NOISE_PUBLIC_KEY_LEN],
 			   const u8 timestamp[NOISE_TIMESTAMP_LEN]);
 
+/* handshake rate limiter (net/noise/ikpsk2/ratelimiter.c)
+ *
+ * Per-source-IP token bucket on handshake initiations; init/exit are driven by
+ * module load/unload. noise_ratelimiter_allow() returns true if a handshake
+ * from @sa is within budget, false to drop it (flood).
+ */
+struct sockaddr;
+void noise_ratelimiter_init(void);
+void noise_ratelimiter_exit(void);
+bool noise_ratelimiter_allow(const struct sockaddr *sa);
+
 /* message framing (net/noise/ikpsk2/handshake.c) */
 /* stamp @hdr with the magic/version and the given message @type */
 void noise_message_header_set(struct noise_message_header *hdr, u8 type);

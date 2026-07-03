@@ -562,6 +562,15 @@ static void svc_noise_handshake(struct svc_xprt *xprt)
 	long saved_rcvtimeo;
 	int status;
 
+	/* Per-source rate limit on handshake initiations: drop a flood from one
+	 * source before allocating state, reading msg1, or doing any crypto. TCP
+	 * has already proven the source address, so xpt_remote is trustworthy.
+	 */
+	if (!noise_ratelimiter_allow((struct sockaddr *)&xprt->xpt_remote)) {
+		status = -EBUSY;
+		goto out_close;
+	}
+
 	if (!svsk->peer) {
 		svsk->peer = kzalloc(sizeof(*svsk->peer), GFP_KERNEL);
 		if (!svsk->peer) {
