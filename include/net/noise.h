@@ -65,45 +65,28 @@ enum rekey_limits {
 	REKEY_AFTER_TIME = 360,	/* seconds (1 hour) */
 };
 
-/*
- * Message framing header (WireGuard-inspired).
- *
- * Every handshake message on the wire begins with this fixed 8-byte header so
- * the receiver can route it with a switch() on @type, exactly like WireGuard's
- * struct message_header / message_type. Unlike WireGuard (which owns its UDP
- * socket and so needs no magic), the Noise handshake shares the TCP port with
- * plaintext RPC and TLS, so a @magic is added: it lets the responder tell a
- * Noise initiation apart from an RPC record marker before touching any crypto.
- *
- * The header is framing only: it is NOT mixed into the Noise hash transcript,
- * so the handshake crypto is unchanged on both ends.
- */
-#define NOISE_MSG_MAGIC		0x4E4F4953u	/* "NOIS" (big-endian on wire) */
+/* NOISE: comment to address */
+#define NOISE_MSG_MAGIC		0x4E4F4953u
 #define NOISE_MSG_VERSION	1u
 
-/* mac1: a cheap keyed-BLAKE2s DoS gate appended to msg1 (net/noise/ikpsk2/cookie.c).
- * The key is derived from the responder (server) static public key, so the
- * responder can drop forged/garbage initiations with a single hash before
- * spending any Curve25519. WireGuard-inspired, but mac1 only: the mac2/cookie
- * (return-routability) part is omitted because this transport is TCP, whose
- * 3-way handshake already proves the peer's source address. Like the framing
- * header, mac1 is outer framing and is NOT mixed into the Noise transcript.
- */
-#define NOISE_MAC1_LABEL_LEN	8	/* "mac1----" (no NUL) */
+/* NOISE: comment to address */
+#define NOISE_MAC1_LABEL_LEN	8
 #define NOISE_MAC1_LEN		16
 
+/* NOISE: comment to address */
 enum noise_message_type {
 	NOISE_MSG_INVALID		= 0,
-	NOISE_MSG_HANDSHAKE_INITIATION	= 1,	/* initiator -> responder (msg1) */
-	NOISE_MSG_HANDSHAKE_RESPONSE	= 2,	/* responder -> initiator (msg2) */
-	NOISE_MSG_HANDSHAKE_ERROR	= 3,	/* responder -> initiator (reject) */
+	NOISE_MSG_HANDSHAKE_INITIATION	= 1,
+	NOISE_MSG_HANDSHAKE_RESPONSE	= 2,
+	NOISE_MSG_HANDSHAKE_ERROR	= 3,
 };
 
+/* NOISE: comment to address */
 struct noise_message_header {
-	__be32	magic;		/* NOISE_MSG_MAGIC			*/
-	u8	type;		/* enum noise_message_type		*/
-	u8	version;	/* NOISE_MSG_VERSION			*/
-	u8	reserved[2];	/* must be zero				*/
+	__be32	magic;
+	u8	type;
+	u8	version;
+	u8	reserved[2];
 } __packed;
 
 /*
@@ -164,16 +147,16 @@ struct noise_peer {
 /* handshake messages */
 /* m1 i -> r */
 struct ikpsk2_msg1 {
-	struct noise_message_header header;	/* type = NOISE_MSG_HANDSHAKE_INITIATION */
+	struct noise_message_header header;	/* NOISE: comment to address */
 	u8 unencrypted_ephemeral[NOISE_PUBLIC_KEY_LEN];
 	u8 encrypted_static[NOISE_PUBLIC_KEY_LEN + NOISE_AUTHTAG_LEN];
 	u8 encrypted_timestamp[NOISE_TIMESTAMP_LEN + NOISE_AUTHTAG_LEN];
-	u8 mac1[NOISE_MAC1_LEN];		/* keyed-BLAKE2s over all preceding bytes */
+	u8 mac1[NOISE_MAC1_LEN];		/* NOISE: comment to address */
 } __packed;
 
 /* m2 r -> i */
 struct ikpsk2_msg2 {
-	struct noise_message_header header;	/* type = NOISE_MSG_HANDSHAKE_RESPONSE */
+	struct noise_message_header header;	/* NOISE: comment to address */
 	u8 ephemeral_public_key[NOISE_PUBLIC_KEY_LEN];
 	u8 encrypted_empty[NOISE_AUTHTAG_LEN];
 } __packed;
@@ -189,44 +172,27 @@ struct data {
  */
 void ikpsk2_noise_init(void);
 
-/* key management (net/noise/ikpsk2/noise_keys.c)
- *
- * A kernel-held keyring ".noise" holds the long-term secrets as "user" keys,
- * provisioned from userspace with keyctl(1). ikpsk2_keyring_init/exit() are
- * driven by the module load/unload; the lookups are used by the handshake.
- */
+/* NOISE: comment to address */
 int ikpsk2_keyring_init(void);
 void ikpsk2_keyring_exit(void);
-/* copy exactly @len bytes of the "user" key @desc into @out (0 / -ENOKEY / -EINVAL) */
+/* NOISE: comment to address */
 int noise_key_lookup(const char *desc, u8 *out, size_t len);
-/* fetch the PSK keyed by @pubkey: description "noise:psk:<pubkey-lowercase-hex>" */
+/* NOISE: comment to address */
 int noise_psk_lookup(const u8 pubkey[NOISE_PUBLIC_KEY_LEN],
 		     u8 psk[NOISE_SYMMETRIC_KEY_LEN]);
-/* anti-replay: true iff @timestamp is strictly newer than the last accepted for
- * @pubkey (advancing the stored value). Persistent across connections, keyed by
- * pubkey. Call only after the client is authenticated (PSK found).
- */
+/* NOISE: comment to address */
 bool noise_client_check_ts(const u8 pubkey[NOISE_PUBLIC_KEY_LEN],
 			   const u8 timestamp[NOISE_TIMESTAMP_LEN]);
 
-/* handshake rate limiter (net/noise/ikpsk2/ratelimiter.c)
- *
- * Per-source-IP token bucket on handshake initiations; init/exit are driven by
- * module load/unload. noise_ratelimiter_allow() returns true if a handshake
- * from @sa is within budget, false to drop it (flood).
- */
+/* NOISE: comment to address */
 struct sockaddr;
 void noise_ratelimiter_init(void);
 void noise_ratelimiter_exit(void);
 bool noise_ratelimiter_allow(const struct sockaddr *sa);
 
-/* message framing (net/noise/ikpsk2/handshake.c) */
-/* stamp @hdr with the magic/version and the given message @type */
+/* NOISE: comment to address */
 void noise_message_header_set(struct noise_message_header *hdr, u8 type);
-/* validate magic/version/reserved and return the message type, or
- * NOISE_MSG_INVALID if the header is not a well-formed Noise message. The
- * analog of WireGuard's SKB_TYPE_LE32() dispatch key.
- */
+/* NOISE: comment to address */
 enum noise_message_type noise_message_classify(const struct noise_message_header *hdr);
 
 /* handshake (net/noise/ikpsk2/handshake.c) */

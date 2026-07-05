@@ -10,14 +10,7 @@
 #include "noise_crypto.h"
 #include "cookie.h"
 
-/*
- * Message framing helpers (WireGuard-inspired).
- *
- * noise_message_header_set() stamps the fixed magic/version onto an outgoing
- * message; noise_message_classify() validates an incoming header and returns
- * its type so the receiver can switch() on it. The header is framing only and
- * is not part of the Noise transcript.
- */
+/* NOISE: comment to address */
 void noise_message_header_set(struct noise_message_header *hdr, u8 type)
 {
 	hdr->magic = cpu_to_be32(NOISE_MSG_MAGIC);
@@ -27,6 +20,7 @@ void noise_message_header_set(struct noise_message_header *hdr, u8 type)
 	hdr->reserved[1] = 0;
 }
 
+/* NOISE: comment to address */
 enum noise_message_type noise_message_classify(const struct noise_message_header *hdr)
 {
 	if (be32_to_cpu(hdr->magic) != NOISE_MSG_MAGIC)
@@ -62,7 +56,7 @@ bool noise_handshake_create_initiation(struct ikpsk2_msg1 *m1, struct noise_hand
 
 	init_handshake(handshake->chaining_key, handshake->hash_transcript, handshake->remote_static);
 
-	/* stamp the framing header so the responder can route this as an initiation */
+	/* NOISE: comment to address */
 	noise_message_header_set(&m1->header, NOISE_MSG_HANDSHAKE_INITIATION);
 
 	/*
@@ -111,11 +105,7 @@ bool noise_handshake_create_initiation(struct ikpsk2_msg1 *m1, struct noise_hand
 	tai64n_now(timestamp);
 	message_encrypt(m1->encrypted_timestamp, timestamp, NOISE_TIMESTAMP_LEN, key, handshake->hash_transcript);
 
-	/* mac1: cheap keyed tag over the whole message so the responder can drop
-	 * forgeries before Curve25519. Keyed by the responder (server) static
-	 * public key, which the initiator holds as remote_static. Must be last,
-	 * after every other msg1 field is populated.
-	 */
+	/* NOISE: comment to address */
 	noise_mac1_stamp(m1, handshake->remote_static);
 
 	//update state and bool
@@ -141,10 +131,7 @@ bool handshake_consume_initiation(struct ikpsk2_msg1 *m1, struct noise_peer *pee
 	u8 t[NOISE_TIMESTAMP_LEN];
 	u8 key[NOISE_SYMMETRIC_KEY_LEN];
 
-	/* mac1: reject forged/garbage msg1 with a single keyed hash BEFORE any
-	 * Curve25519. Keyed by our own (responder) static public key. This is the
-	 * cheap DoS gate; real authentication is still the PSK + static-key DH below.
-	 */
+	/* NOISE: comment to address */
 	if (!noise_mac1_verify(m1, peer->handshake.static_identity->static_public))
 		goto out;
 
@@ -189,12 +176,7 @@ bool handshake_consume_initiation(struct ikpsk2_msg1 *m1, struct noise_peer *pee
 		goto out;
 	}
 
-	/* Replay defense is NOT done here: this per-connection handshake struct is
-	 * freshly zeroed for every connection, so it cannot remember a client's
-	 * previous timestamp. The recovered timestamp is stored below and checked
-	 * by the caller against a persistent, per-pubkey record (noise_client_check_ts)
-	 * once the client has been authenticated (PSK found). See svc_noise_handshake().
-	 */
+	/* NOISE: comment to address */
 
 	/*
 		Update peer
@@ -220,7 +202,7 @@ bool handshake_create_response(struct ikpsk2_msg2 *m2, struct noise_peer *peer)
 	u8 key[NOISE_SYMMETRIC_KEY_LEN];
 	bool ret = false;
 
-	/* stamp the framing header so the initiator can route this as a response */
+	/* NOISE: comment to address */
 	noise_message_header_set(&m2->header, NOISE_MSG_HANDSHAKE_RESPONSE);
 
 	/*

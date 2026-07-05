@@ -19,14 +19,14 @@ static int __init noise_init(void)
 	printk(KERN_INFO "Custom module loaded with crypto functions ready.\n");
 	ikpsk2_noise_init();
 
-	/* keyring holding the long-term secrets (PSKs, static private keys) */
+	/* NOISE: comment to address */
 	ret = ikpsk2_keyring_init();
 	if (ret) {
 		printk(KERN_ERR "IKpsk2 keyring init failed (%d).\n", ret);
 		return ret;
 	}
 
-	/* per-source handshake rate limiter (starts its GC timer) */
+	/* NOISE: comment to address */
 	noise_ratelimiter_init();
 
 	printk(KERN_INFO "IKpsk2 init ok.\n");

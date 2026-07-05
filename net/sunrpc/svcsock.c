@@ -411,9 +411,7 @@ static void svc_data_ready(struct sock *sk)
 		rmb();
 		svsk->sk_odata(sk);
 		trace_svcsock_data_ready(&svsk->sk_xprt, 0);
-		/* NOISE also suppress while the async Noise handshake worker
-		 * owns the socket, so no service thread races it on recv.
-		 */
+		/* NOISE: comment to address */
 		if (test_bit(XPT_HANDSHAKE, &svsk->sk_xprt.xpt_flags) ||
 		    test_bit(XPT_NOISE_HS, &svsk->sk_xprt.xpt_flags))
 			return;
@@ -463,23 +461,13 @@ module_param(svc_noise, bool, 0644);
 MODULE_PARM_DESC(svc_noise,
 		 "Expect a Noise IKpsk2 handshake on accepted TCP connections");
 
-/* NOISE workqueue running the Noise responder handshake off the nfsd service
- * threads. Created in svc_init_xprt_sock(); bounded so a handshake flood cannot
- * spawn unlimited workers (a per-source rate limiter tightens this further).
- */
+/* NOISE: comment to address */
 static struct workqueue_struct *noise_hs_wq;
 
 /* NOISE shared local static identity (single-client model for now) */
 static struct noise_identity svc_noise_identity;
 
-/*
- * svc_noise_setup_keys - install the server static identity before the IKpsk2
- * responder exchange. The server static private key is loaded from the kernel
- * keyring ("noise:priv:server"); the per-client PSK is NOT set here but is
- * selected after msg1 by svc_noise_handshake() once the client static public
- * key is known (see noise_psk_lookup()). The remote (client) static public key
- * itself is filled in by handshake_consume_initiation() from the decrypted msg1.
- */
+/* NOISE: comment to address */
 static int svc_noise_setup_keys(struct noise_peer *peer)
 {
 	struct noise_handshake *hs = &peer->handshake;
@@ -532,11 +520,7 @@ static int svc_noise_recv(struct socket *sock, void *buf, size_t len)
 	return ret == len ? 0 : -EIO;
 }
 
-/* svc_noise_send_error - best-effort reject notice to the initiator.
- * Sends a header-only NOISE_MSG_HANDSHAKE_ERROR so a genuine Noise client can
- * tell a refusal apart from a dropped connection. Errors are ignored: the
- * connection is being torn down regardless.
- */
+/* NOISE: comment to address */
 static void svc_noise_send_error(struct socket *sock)
 {
 	struct noise_message_header err;
@@ -562,10 +546,7 @@ static void svc_noise_handshake(struct svc_xprt *xprt)
 	long saved_rcvtimeo;
 	int status;
 
-	/* Per-source rate limit on handshake initiations: drop a flood from one
-	 * source before allocating state, reading msg1, or doing any crypto. TCP
-	 * has already proven the source address, so xpt_remote is trustworthy.
-	 */
+	/* NOISE: comment to address */
 	if (!noise_ratelimiter_allow((struct sockaddr *)&xprt->xpt_remote)) {
 		status = -EBUSY;
 		goto out_close;
@@ -586,47 +567,32 @@ static void svc_noise_handshake(struct svc_xprt *xprt)
 	if (status)
 		goto out_restore;
 
-	/* msg1 : initiator -> responder.
-	 *
-	 * Read the 8-byte framing header first, then dispatch on its type
-	 * (WireGuard-style switch). Reading the header before the body lets a
-	 * non-Noise connection (plaintext RPC / TLS sharing this port) be
-	 * rejected after 8 bytes, before touching any crypto.
-	 */
+	/* NOISE: comment to address */
 	status = svc_noise_recv(sock, &m1.header, sizeof(m1.header));
 	if (status)
 		goto out_restore;
 
 	switch (noise_message_classify(&m1.header)) {
 	case NOISE_MSG_HANDSHAKE_INITIATION:
-		/* read the rest of msg1 (everything after the header) */
+		/* NOISE: comment to address */
 		status = svc_noise_recv(sock, (u8 *)&m1 + sizeof(m1.header),
 					sizeof(m1) - sizeof(m1.header));
 		if (status)
 			goto out_restore;
 		if (!handshake_consume_initiation(&m1, svsk->peer)) {
-			/* tell the initiator the handshake was refused */
+			/* NOISE: comment to address */
 			svc_noise_send_error(sock);
 			status = -EACCES;
 			goto out_restore;
 		}
-		/* per-client PSK: now that msg1 has revealed the client static
-		 * public key, select the matching PSK from the keyring. An
-		 * unknown (or revoked) client has no entry and is refused.
-		 */
+		/* NOISE: comment to address */
 		if (noise_psk_lookup(svsk->peer->handshake.remote_static,
 				     svsk->peer->handshake.psk)) {
 			svc_noise_send_error(sock);
 			status = -EACCES;
 			goto out_restore;
 		}
-		/* anti-replay: the client is now authenticated (PSK found), so
-		 * check the msg1 timestamp against the persistent per-client
-		 * record (keyed by static pubkey). A replayed msg1 arriving on a
-		 * new connection carries a timestamp <= the last one we accepted
-		 * from this client and is refused. Doing this only after the PSK
-		 * check keeps forged/unknown pubkeys from populating the table.
-		 */
+		/* NOISE: comment to address */
 		if (!noise_client_check_ts(svsk->peer->handshake.remote_static,
 					   svsk->peer->handshake.latest_timestamp)) {
 			svc_noise_send_error(sock);
@@ -635,7 +601,7 @@ static void svc_noise_handshake(struct svc_xprt *xprt)
 		}
 		break;
 	default:
-		/* not a Noise initiation: refuse this connection */
+		/* NOISE: comment to address */
 		status = -EPROTO;
 		goto out_restore;
 	}
@@ -666,10 +632,7 @@ out_restore:
 	if (status)
 		goto out_close;
 
-	/* Mark the transport ready for RPC traffic. Clear both handshake bits:
-	 * XPT_NOISE_HS re-enables the data path after the async worker, and
-	 * XPT_HANDSHAKE covers the inline fallback path (workqueue unavailable).
-	 */
+	/* NOISE: comment to address */
 	clear_bit(XPT_NOISE_HS, &xprt->xpt_flags);
 	clear_bit(XPT_HANDSHAKE, &xprt->xpt_flags);
 	set_bit(XPT_DATA, &xprt->xpt_flags);
@@ -685,11 +648,7 @@ out_close:
 	svc_xprt_enqueue(xprt);
 }
 
-/* NOISE svc_noise_handshake_work - run the responder handshake on a workqueue.
- * A reference on the xprt is held by the caller (svc_tcp_handshake) for the
- * lifetime of this work and dropped here, so the svc_sock (which embeds this
- * work item and the socket) cannot be freed while the handshake runs.
- */
+/* NOISE: comment to address */
 static void svc_noise_handshake_work(struct work_struct *work)
 {
 	struct svc_sock *svsk = container_of(work, struct svc_sock, noise_hs_work);
@@ -740,18 +699,7 @@ static void svc_tcp_handshake(struct svc_xprt *xprt)
 	};
 	int ret;
 
-	/* NOISE run the in-kernel Noise responder instead of the TLS upcall.
-	 *
-	 * The responder does blocking reads (bounded by SVC_HANDSHAKE_TO) and
-	 * Curve25519 work, so run it on a workqueue rather than inline: this
-	 * frees the nfsd service thread immediately and keeps a handshake flood
-	 * from starving the (small, fixed) RPC service pool.
-	 *
-	 * XPT_NOISE_HS keeps svc_data_ready() from enqueuing while the worker
-	 * owns the socket; XPT_HANDSHAKE is cleared so svc_xprt_ready() does not
-	 * consider the xprt "ready" and re-dispatch it (which would busy-spin a
-	 * service thread). A reference is taken for the work item.
-	 */
+	/* NOISE: comment to address */
 	if (svc_noise) {
 		if (noise_hs_wq) {
 			set_bit(XPT_NOISE_HS, &xprt->xpt_flags);
@@ -760,14 +708,11 @@ static void svc_tcp_handshake(struct svc_xprt *xprt)
 			INIT_WORK(&svsk->noise_hs_work,
 				  svc_noise_handshake_work);
 			if (!queue_work(noise_hs_wq, &svsk->noise_hs_work)) {
-				/* already queued (should not happen): undo ref */
+				/* NOISE: comment to address */
 				svc_xprt_put(xprt);
 			}
 		} else {
-			/* workqueue unavailable: run inline (blocks this
-			 * thread, the pre-async behaviour) so the connection
-			 * still works, just without the DoS isolation.
-			 */
+			/* NOISE: comment to address */
 			svc_noise_handshake(xprt);
 		}
 		return;
@@ -1625,12 +1570,7 @@ static struct svc_xprt_class svc_tcp_class = {
 
 void svc_init_xprt_sock(void)
 {
-	/* NOISE workqueue for the async Noise responder handshake. WQ_UNBOUND so
-	 * the blocking/CPU-bound work is spread across CPUs; a bounded max_active
-	 * caps concurrent handshake workers so a flood cannot exhaust memory with
-	 * kernel threads. If this fails the handshake falls back to running
-	 * inline (see svc_tcp_handshake()).
-	 */
+	/* NOISE: comment to address */
 	noise_hs_wq = alloc_workqueue("nfsd_noise_hs", WQ_UNBOUND, 64);
 	if (!noise_hs_wq)
 		pr_warn("svc: Noise handshake workqueue alloc failed; "

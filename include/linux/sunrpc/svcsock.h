@@ -50,10 +50,7 @@ struct svc_sock {
 	 * transport-phase encryption is done by the socket ULP (noise_ulp.c).
 	 */
 	struct noise_peer	*peer;
-	/* NOISE the Noise responder handshake runs here (off the nfsd service
-	 * threads) so its blocking reads and Curve25519 work cannot starve the
-	 * RPC service pool.
-	 */
+	/* NOISE: comment to address */
 	struct work_struct	noise_hs_work;
 
 	/* received data */

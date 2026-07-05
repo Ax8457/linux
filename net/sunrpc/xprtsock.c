@@ -2654,24 +2654,14 @@ out_unlock:
 /* NOISE shared local static identity (single-client model for now) */
 static struct noise_identity xs_noise_identity;
 
-/*
- * xs_noise_setup_keys - install the static identity, remote static public key
- * and PSK into the handshake state before the IKpsk2 exchange. All three are
- * loaded from the kernel keyring (see net/noise/ikpsk2/noise_keys.c):
- *
- *   noise:priv:client   our static private scalar
- *   noise:pub:server    the server static public key
- *   noise:psk:<our-pub> the PSK shared with the server, keyed by our own
- *                       static public key (the same description the server
- *                       looks up once it recovers it from msg1).
- */
+/* NOISE: comment to address */
 static int xs_noise_setup_keys(struct noise_peer *peer)
 {
 	struct noise_handshake *hs = &peer->handshake;
 	u8 priv[NOISE_PUBLIC_KEY_LEN];
 	int ret;
 
-	/* local static keypair: load the private, clamp it, derive the public */
+	/* NOISE: comment to address */
 	ret = noise_key_lookup("noise:priv:client", priv, sizeof(priv));
 	if (ret)
 		return ret;
@@ -2684,13 +2674,13 @@ static int xs_noise_setup_keys(struct noise_peer *peer)
 	}
 	hs->static_identity = &xs_noise_identity;
 
-	/* remote (server) static public key */
+	/* NOISE: comment to address */
 	ret = noise_key_lookup("noise:pub:server", hs->remote_static,
 			       NOISE_PUBLIC_KEY_LEN);
 	if (ret)
 		goto out;
 
-	/* PSK shared with the server, keyed by our own static public key */
+	/* NOISE: comment to address */
 	ret = noise_psk_lookup(xs_noise_identity.static_public, hs->psk);
 	if (ret)
 		goto out;
@@ -2778,13 +2768,7 @@ static int xs_noise_handshake_sync(struct rpc_xprt *xprt)
 	if (status)
 		goto out;
 
-	/* msg2 : responder -> initiator.
-	 *
-	 * Read the framing header first and dispatch on its type, mirroring the
-	 * responder. A header-only NOISE_MSG_HANDSHAKE_ERROR signals an explicit
-	 * refusal; anything else that is not a response means the server is not
-	 * speaking Noise on this port.
-	 */
+	/* NOISE: comment to address */
 	status = xs_noise_recv(sock, &m2.header, sizeof(m2.header));
 	if (status)
 		goto out;
