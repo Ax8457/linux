@@ -17,9 +17,7 @@
 static bool kat_check(const char *name, const u8 *actual,
 		      const u8 *expected, size_t len)
 {
-	u8 zero[NOISE_HASH_LEN] = {};
-
-	if (len <= sizeof(zero) && memcmp(expected, zero, len) == 0) {
+	if (!memchr_inv(expected, 0, len)) {
 		/* NOISE: comment to address */
 		pr_warn("noise_kat: [%s] golden unset - captured value below\n",
 			name);
