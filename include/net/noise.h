@@ -175,6 +175,8 @@ void ikpsk2_noise_init(void);
 /* NOISE: comment to address */
 int ikpsk2_keyring_init(void);
 /* NOISE: comment to address */
+void ikpsk2_keyring_exit(void);
+/* NOISE: comment to address */
 int noise_key_lookup(const char *desc, u8 *out, size_t len);
 /* NOISE: comment to address */
 int noise_psk_lookup(const u8 pubkey[NOISE_PUBLIC_KEY_LEN],
