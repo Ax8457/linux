@@ -5,3 +5,6 @@
 obj-$(CONFIG_NOISE_IKPSK2) += noise_ikpsk2.o
 
 noise_ikpsk2-y := noise_main.o noise_crypto.o handshake.o noise_transport.o noise_ulp.o noise_keys.o cookie.o ratelimiter.o
+noise_ikpsk2-$(CONFIG_NOISE_IKPSK2_SELFTEST) += noise_ikpsk2_ut.o
+noise_ikpsk2-$(CONFIG_NOISE_IKPSK2_SELFTEST) += noise_ikpsk2_handshake_ut.o
+noise_ikpsk2-$(CONFIG_NOISE_IKPSK2_SELFTEST) += noise_ikpsk2_kat_ut.o

@@ -11,6 +11,8 @@
 #include <linux/init.h>		/* Needed for the macros */
 /* NOISE is now available in linux kernel */
 #include <net/noise.h>
+/* NOISE: comment to address */
+#include "noise_ikpsk2_ut.h"
 
 static int __init noise_init(void)
 {
@@ -18,6 +20,24 @@ static int __init noise_init(void)
 
 	printk(KERN_INFO "Custom module loaded with crypto functions ready.\n");
 	ikpsk2_noise_init();
+
+#if IS_ENABLED(CONFIG_NOISE_IKPSK2_SELFTEST)
+	/* NOISE: comment to address */
+	if (!noise_ikpsk2_selftest()) {
+		printk(KERN_ERR "IKpsk2 crypto selftest failed; aborting load.\n");
+		return -ENOTRECOVERABLE;
+	}
+	/* NOISE: comment to address */
+	if (!noise_ikpsk2_handshake_selftest()) {
+		printk(KERN_ERR "IKpsk2 handshake selftest failed; aborting load.\n");
+		return -ENOTRECOVERABLE;
+	}
+	/* NOISE: comment to address */
+	if (!noise_ikpsk2_kat_selftest()) {
+		printk(KERN_ERR "IKpsk2 KAT selftest failed; aborting load.\n");
+		return -ENOTRECOVERABLE;
+	}
+#endif
 
 	/* NOISE: comment to address */
 	ret = ikpsk2_keyring_init();

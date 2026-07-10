@@ -20,3 +20,18 @@ config NOISE_IKPSK2
 	  symbols for use by other kernel subsystems.
 
 	  If unsure, say N.
+
+# NOISE: comment to address
+config NOISE_IKPSK2_SELFTEST
+	bool "Noise IKpsk2 crypto selftests (abort module load on failure)"
+	depends on NOISE_IKPSK2
+	default n
+	help
+	  Run known-answer / convergence selftests over the Noise IKpsk2
+	  crypto core (Diffie-Hellman mixing, KDF, AEAD) when the module is
+	  loaded. If any test fails, the module load is aborted.
+
+	  This is a development/verification aid and is compiled into the
+	  module only when enabled.
+
+	  If unsure, say N.
