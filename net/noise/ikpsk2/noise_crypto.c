@@ -1,6 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0
 // HWU MSc project
 /*
-*	NFSv4 Data-In-Flight Encryption over Noise protocol Framework 
+*	NFSv4 Data-In-Flight Encryption over Noise protocol Framework
 *
 *	Axel Biegalski
 */
@@ -34,7 +35,7 @@
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 19, 0)
 #define blake2s_state blake2s_ctx
 #endif
- 
+
 /*
 	Vars
 */
@@ -77,6 +78,7 @@ void __init ikpsk2_noise_init(void)
 void update_transcript(u8 hash[NOISE_HASH_LEN], const u8 *src, size_t src_len)
 {
 	struct blake2s_state blake;
+
 	blake2s_init(&blake, NOISE_HASH_LEN);
 	blake2s_update(&blake, hash, NOISE_HASH_LEN);
 	blake2s_update(&blake, src, src_len);
@@ -137,7 +139,7 @@ static void hmac(u8 *out, const u8 *in, const u8 *key, const size_t inlen, const
  *  This function was taken from wireguard source code which states:
  *  " This is Hugo Krawczyk's HKDF:
  *  - https://eprint.iacr.org/2010/264.pdf
- *  - https://tools.ietf.org/html/rfc5869 " 
+ *  - https://tools.ietf.org/html/rfc5869 "
  */
 static void kdf(u8 *first_dst, u8 *second_dst, u8 *third_dst, const u8 *data, size_t first_len, size_t second_len, size_t third_len, size_t data_len, const u8 chaining_key[NOISE_HASH_LEN])
 {
@@ -186,59 +188,57 @@ out:
 }
 
 /*
-	Message1 : e, es ,s ,ss 
+	Message1 : e, es ,s ,ss
 	e:
 		C1 = hkdf(C0, Ephemeral pub initiator)
 		H2 = hash(H1, Ephermeral pub initiator)
-		
+
 	/!\ HKDF : only one expansion
 */
 //e
-void message_e(u8 dst[NOISE_PUBLIC_KEY_LEN], const u8 ephemeral_pubkey_initiator[NOISE_PUBLIC_KEY_LEN], u8 chaining_key[NOISE_HASH_LEN], u8 hash[NOISE_HASH_LEN]) {
-    
-    if (ephemeral_pubkey_initiator != dst) {
-        memcpy(dst, ephemeral_pubkey_initiator, NOISE_PUBLIC_KEY_LEN);
-    }
-    kdf(   
-        chaining_key,       
-        NULL, NULL,              // one expansion (hkdf1)
-        ephemeral_pubkey_initiator,                              
-        NOISE_HASH_LEN,
-        0 , 0, //len of second and thirdhkey       
-        NOISE_PUBLIC_KEY_LEN, 
-        chaining_key          
-    );
+void message_e(u8 dst[NOISE_PUBLIC_KEY_LEN], const u8 ephemeral_pubkey_initiator[NOISE_PUBLIC_KEY_LEN], u8 chaining_key[NOISE_HASH_LEN], u8 hash[NOISE_HASH_LEN])
+{
+	if (ephemeral_pubkey_initiator != dst)
+		memcpy(dst, ephemeral_pubkey_initiator, NOISE_PUBLIC_KEY_LEN);
+	kdf(
+		chaining_key,
+		NULL, NULL,              // one expansion (hkdf1)
+		ephemeral_pubkey_initiator,
+		NOISE_HASH_LEN,
+		0, 0, //len of second and thirdhkey
+		NOISE_PUBLIC_KEY_LEN,
+		chaining_key
+	);
 
-    // H2 = hash(H1, Ephemeral pub initiator)
-    update_transcript(hash, dst, NOISE_PUBLIC_KEY_LEN); 
+	// H2 = hash(H1, Ephemeral pub initiator)
+	update_transcript(hash, dst, NOISE_PUBLIC_KEY_LEN);
 }
 
 /*
 	Diffie Hellman shared secret mixing function
-	C2 || K1 = hkdf(C1, dh(Ephemeral public initiator, Ephemeral private initiator)) 
+	C2 || K1 = hkdf(C1, dh(Ephemeral public initiator, Ephemeral private initiator))
 */
 //es
 bool __must_check mix_dh(u8 chaining_key[NOISE_HASH_LEN], u8 key[NOISE_SYMMETRIC_KEY_LEN], const u8 private_key[NOISE_PUBLIC_KEY_LEN], const u8 public_key[NOISE_PUBLIC_KEY_LEN])
 {
 	u8 dh_calculation[NOISE_PUBLIC_KEY_LEN];
 	//diffie hellman share secret
-    if (!curve25519(dh_calculation, private_key, public_key)){
+	if (!curve25519(dh_calculation, private_key, public_key))
 		return false;
-	}
 	kdf(
-        chaining_key, //C2
-        key, //k1
-        NULL, 
-        dh_calculation, 
-        NOISE_HASH_LEN,
-        NOISE_SYMMETRIC_KEY_LEN, 
-        0, NOISE_PUBLIC_KEY_LEN, chaining_key);
+	chaining_key, //C2
+	key, //k1
+	NULL,
+	dh_calculation,
+	NOISE_HASH_LEN,
+	NOISE_SYMMETRIC_KEY_LEN,
+	0, NOISE_PUBLIC_KEY_LEN, chaining_key);
 	memzero_explicit(dh_calculation, NOISE_PUBLIC_KEY_LEN);
 	return true;
 	//extract
 }
 
-/* 
+/*
 	Encryption/Decryption function
 	public initiator enc + H3
 	H3 = hash(H2, Spubinitenc)
@@ -248,39 +248,36 @@ bool __must_check mix_dh(u8 chaining_key[NOISE_HASH_LEN], u8 key[NOISE_SYMMETRIC
 void message_encrypt(u8 *dst_ciphertext, const u8 *src_plaintext, size_t src_len, u8 key[NOISE_SYMMETRIC_KEY_LEN], u8 hash[NOISE_HASH_LEN])
 {
 	chacha20poly1305_encrypt(
-        dst_ciphertext, 
-        src_plaintext, 
-        src_len, hash, 
-        NOISE_HASH_LEN,
+	dst_ciphertext,
+	src_plaintext,
+	src_len, hash,
+	NOISE_HASH_LEN,
 		0 /* Always zero for Noise_IK */, key);
 
 	update_transcript(hash, dst_ciphertext, noise_encrypted_len(src_len));
 }
+
 //server side
 bool message_decrypt(u8 *dst_plaintext, const u8 *src_ciphertext, size_t src_len, u8 key[NOISE_SYMMETRIC_KEY_LEN], u8 hash[NOISE_HASH_LEN])
 {
-    if (!chacha20poly1305_decrypt(
-        dst_plaintext, 
-        src_ciphertext, 
-        src_len,
-		hash, 
-        NOISE_HASH_LEN,
-		0 /* Always zero for Noise_IK */, 
-        key))
-	{ return false; }
+	if (!chacha20poly1305_decrypt(dst_plaintext, src_ciphertext, src_len,
+				      hash, NOISE_HASH_LEN,
+				      0 /* Always zero for Noise_IK */, key))
+		return false;
 
 	update_transcript(hash, src_ciphertext, src_len); //H3
 	return true;
 }
 
 /*
-    Tai64N    
+    Tai64N
     THis function was taken from wireguard source code
     https://github.com/WireGuard/wireguard-linux/blob/stable/drivers/net/wireguard/noise.c
 */
 void tai64n_now(u8 output[NOISE_TIMESTAMP_LEN])
 {
 	struct timespec64 now;
+
 	ktime_get_real_ts64(&now);
 	/* In order to prevent some sort of infoleak from precise timers, we
 	 * round down the nanoseconds part to the closest rounded-down power of
@@ -288,7 +285,7 @@ void tai64n_now(u8 output[NOISE_TIMESTAMP_LEN])
 	 * implementation.
 	 */
 	now.tv_nsec = ALIGN_DOWN(now.tv_nsec,
-		rounddown_pow_of_two(NSEC_PER_SEC / INITIATIONS_PER_SECOND));
+				 rounddown_pow_of_two(NSEC_PER_SEC / INITIATIONS_PER_SECOND));
 	/* https://cr.yp.to/libtai/tai64.html */
 	*(__be64 *)output = cpu_to_be64(0x400000000000000aULL + now.tv_sec);
 	*(__be32 *)(output + sizeof(__be64)) = cpu_to_be32(now.tv_nsec);
@@ -300,76 +297,77 @@ void tai64n_now(u8 output[NOISE_TIMESTAMP_LEN])
 //e
 //same function as message1
 //ee
-bool __must_check message_ee (const u8 ephemeral_public[NOISE_PUBLIC_KEY_LEN], const u8 ephemeral_private[NOISE_PUBLIC_KEY_LEN] ,u8 chaining_key[NOISE_HASH_LEN]){
+(const u8 ephemeral_public[NOISE_PUBLIC_KEY_LEN], const u8 ephemeral_private[NOISE_PUBLIC_KEY_LEN], u8 chaining_key[NOISE_HASH_LEN])
+{
 	//C5
 	u8 dh_calculation[NOISE_PUBLIC_KEY_LEN];
 	//diffie hellman share secret
-	if (!curve25519(dh_calculation, ephemeral_private, ephemeral_public)){
+	if (!curve25519(dh_calculation, ephemeral_private, ephemeral_public)) {
 		return false;
 	}
-    kdf(
-        chaining_key, //C2
-        NULL, //k1
-        NULL, 
-        dh_calculation, 
-        NOISE_HASH_LEN,
-        0, 
-        0, NOISE_PUBLIC_KEY_LEN, chaining_key);
+	kdf(
+	chaining_key, //C2
+	NULL, //k1
+	NULL,
+	dh_calculation,
+	NOISE_HASH_LEN,
+	0,
+	0, NOISE_PUBLIC_KEY_LEN, chaining_key);
 	memzero_explicit(dh_calculation, NOISE_PUBLIC_KEY_LEN);
 
 	return true;
 }
 
 //se
-bool __must_check message_se(const u8 ephemeral_private_key[NOISE_PUBLIC_KEY_LEN], const u8 remote_static[NOISE_PUBLIC_KEY_LEN] ,u8 chaining_key[NOISE_HASH_LEN]){
+bool __must_check message_se(const u8 ephemeral_private_key[NOISE_PUBLIC_KEY_LEN], const u8 remote_static[NOISE_PUBLIC_KEY_LEN], u8 chaining_key[NOISE_HASH_LEN])
+{
 	//C1
 	u8 dh_calculation[NOISE_PUBLIC_KEY_LEN];
 	//diffie hellman share secret
-	if (!curve25519(dh_calculation, ephemeral_private_key, remote_static)){
+	if (!curve25519(dh_calculation, ephemeral_private_key, remote_static)) {
 		return false;
 	}
 	kdf(
-        chaining_key, //C2
-        NULL, //k1
-        NULL, 
-        dh_calculation, 
-        NOISE_HASH_LEN,
-        0, 
-        0, NOISE_PUBLIC_KEY_LEN, chaining_key);
+	chaining_key, //C2
+	NULL, //k1
+	NULL,
+	dh_calculation,
+	NOISE_HASH_LEN,
+	0,
+	0, NOISE_PUBLIC_KEY_LEN, chaining_key);
 	memzero_explicit(dh_calculation, NOISE_PUBLIC_KEY_LEN);
 
 	return true;
 }
+
 //psk
 void mix_psk(u8 psk[NOISE_SYMMETRIC_KEY_LEN], u8 key[NOISE_SYMMETRIC_KEY_LEN], u8 chaining_key[NOISE_HASH_LEN], u8 hash[NOISE_HASH_LEN])
 {
 	u8 pi[NOISE_HASH_LEN];
-	//expand 
+	//expand
 	kdf(
-        chaining_key, //C2
-        pi, 
-        key, //key
-        psk, 
-        NOISE_HASH_LEN,
-        NOISE_HASH_LEN,
-        NOISE_SYMMETRIC_KEY_LEN, 
-        NOISE_SYMMETRIC_KEY_LEN, chaining_key);
-	
-	update_transcript(hash, pi, NOISE_HASH_LEN); //H6
+	chaining_key, //C2
+	pi,
+	key, //key
+	psk,
+	NOISE_HASH_LEN,
+	NOISE_HASH_LEN,
+	NOISE_SYMMETRIC_KEY_LEN,
+	NOISE_SYMMETRIC_KEY_LEN, chaining_key);
 
+	update_transcript(hash, pi, NOISE_HASH_LEN); //H6
 }
 
 //derivate keys
 void derive_keys(u8 first_key[NOISE_SYMMETRIC_KEY_LEN], u8 second_key[NOISE_SYMMETRIC_KEY_LEN], const u8 chaining_key[NOISE_HASH_LEN])
 {
 	kdf(
-        first_key,
-        second_key,
-        NULL,NULL,
-        NOISE_SYMMETRIC_KEY_LEN, NOISE_SYMMETRIC_KEY_LEN,
-        0,0,
-        chaining_key
-    );
+	first_key,
+	second_key,
+	NULL, NULL,
+	NOISE_SYMMETRIC_KEY_LEN, NOISE_SYMMETRIC_KEY_LEN,
+	0, 0,
+	chaining_key
+	);
 }
-
 

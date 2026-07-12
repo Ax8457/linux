@@ -74,7 +74,7 @@ bool noise_ratelimiter_allow(const struct sockaddr *sa)
 	spin_lock_bh(&rl_lock);
 	e = rl_find(key);
 	if (!e) {
-		e = kzalloc(sizeof(*e), GFP_ATOMIC);
+		e = kzalloc_obj(*e, GFP_ATOMIC);
 		if (!e) {
 			spin_unlock_bh(&rl_lock);
 			return true;

@@ -31,7 +31,7 @@ int ikpsk2_keyring_init(void)
 	struct key *keyring;
 
 	keyring = keyring_alloc(".noise",
-			GLOBAL_ROOT_UID, GLOBAL_ROOT_GID, current_cred(),
+				GLOBAL_ROOT_UID, GLOBAL_ROOT_GID, current_cred(),
 			(KEY_POS_ALL & ~KEY_POS_SETATTR) |
 			KEY_USR_VIEW | KEY_USR_READ |
 			KEY_USR_WRITE | KEY_USR_SEARCH,
@@ -139,7 +139,7 @@ static struct noise_client *noise_client_get(const u8 *pubkey)
 	if (cl)
 		return cl;
 
-	new = kzalloc(sizeof(*new), GFP_KERNEL);
+	new = kzalloc_obj(*new, GFP_KERNEL);
 	if (!new)
 		return NULL;
 	memcpy(new->static_public, pubkey, NOISE_PUBLIC_KEY_LEN);

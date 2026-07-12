@@ -1,6 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0
 // HWU MSc project
 /*
-*	NFSv4 Data-In-Flight Encryption over Noise protocol Framework 
+*	NFSv4 Data-In-Flight Encryption over Noise protocol Framework
 *
 *	Axel Biegalski
 */
@@ -41,11 +42,10 @@ enum noise_message_type noise_message_classify(const struct noise_message_header
 }
 
 
-
-//INITIATOR -> handshake initiation creation 
+//INITIATOR -> handshake initiation creation
 bool noise_handshake_create_initiation(struct ikpsk2_msg1 *m1, struct noise_handshake *handshake)
-{	
-	//vars 
+{
+	//vars
 	u8 timestamp[NOISE_TIMESTAMP_LEN];
 	u8 key[NOISE_SYMMETRIC_KEY_LEN];
 	bool ret = false;
@@ -67,36 +67,35 @@ bool noise_handshake_create_initiation(struct ikpsk2_msg1 *m1, struct noise_hand
 	*/
 	//generate ephemerals
 	curve25519_generate_secret(handshake->ephemeral_private);
-	if (!curve25519_generate_public(m1->unencrypted_ephemeral, handshake->ephemeral_private)){
+	if (!curve25519_generate_public(m1->unencrypted_ephemeral, handshake->ephemeral_private)) {
 		goto out;
 	}
 
 	//hkdf & hash update
-	message_e(m1->unencrypted_ephemeral,m1->unencrypted_ephemeral, handshake->chaining_key, handshake->hash_transcript);
+	message_e(m1->unencrypted_ephemeral, m1->unencrypted_ephemeral, handshake->chaining_key, handshake->hash_transcript);
 
 	/*
 		es: C2 & k1
 		C2 || k1 = hkdf2(C1, dh(E_priv_i,S_pub_r))
 	*/
-	if (!mix_dh(handshake->chaining_key, key , handshake->ephemeral_private, handshake->remote_static)){
+	if (!mix_dh(handshake->chaining_key, key, handshake->ephemeral_private, handshake->remote_static)) {
 		goto out;
 	}
-	
+
 	/*
 		s: timestamps encrypt & H3
 		S pub encrypted = aenc(k1,0,S_pub_i,H2)
 		H3 = hash(H2, S_pub_encrypted)
 	*/
-	message_encrypt(m1->encrypted_static, handshake->static_identity->static_public, NOISE_PUBLIC_KEY_LEN ,key, handshake->hash_transcript);
+	message_encrypt(m1->encrypted_static, handshake->static_identity->static_public, NOISE_PUBLIC_KEY_LEN, key, handshake->hash_transcript);
 
 	/*
 		ss: C3 & K2
 		C3 || k2 = hkdf2(C2, dh(S_priv_i, S_pub_r))
-		/!\ in the future use pre computed static static instead
+		/!\ in the future use pre computed static instead
 	*/
-	if (!mix_dh(handshake->chaining_key, key, handshake->static_identity->static_private, handshake->remote_static))
-	{ 
-		goto out; 
+	if (!mix_dh(handshake->chaining_key, key, handshake->static_identity->static_private, handshake->remote_static)) {
+		goto out;
 	}
 
 	/*
@@ -116,7 +115,6 @@ out:
 	memzero_explicit(key, NOISE_SYMMETRIC_KEY_LEN);
 	return ret;
 }
-
 
 
 bool handshake_consume_initiation(struct ikpsk2_msg1 *m1, struct noise_peer *peer)
@@ -143,21 +141,19 @@ bool handshake_consume_initiation(struct ikpsk2_msg1 *m1, struct noise_peer *pee
 	/*
 		e : C1 & H2
 	*/
-	message_e(e,m1->unencrypted_ephemeral, chaining_key, hash_transcript );
+	message_e(e, m1->unencrypted_ephemeral, chaining_key, hash_transcript);
 
 	/*
 		es: C2 & K1
 	*/
-	if (!mix_dh(chaining_key, key, peer->handshake.static_identity->static_private,e))
-	{
+	if (!mix_dh(chaining_key, key, peer->handshake.static_identity->static_private, e)) {
 		goto out;
 	}
 
 	/*
 		dec S_pub_i & H3
 	*/
-	if (!message_decrypt(s, m1->encrypted_static, NOISE_PUBLIC_KEY_LEN + NOISE_AUTHTAG_LEN, key, hash_transcript))
-	{
+	if (!message_decrypt(s, m1->encrypted_static, NOISE_PUBLIC_KEY_LEN + NOISE_AUTHTAG_LEN, key, hash_transcript)) {
 		goto out;
 	}
 
@@ -165,14 +161,14 @@ bool handshake_consume_initiation(struct ikpsk2_msg1 *m1, struct noise_peer *pee
 	/*
 		ss : C3 + K2
 	*/
-	if (!mix_dh(chaining_key,key,peer->handshake.static_identity->static_private, s)){
+	if (!mix_dh(chaining_key, key, peer->handshake.static_identity->static_private, s)) {
 		goto out;
 	}
 
 	/*
 		t: dec timestamp + h4
 	*/
-	if (!message_decrypt(t, m1->encrypted_timestamp, NOISE_TIMESTAMP_LEN + NOISE_AUTHTAG_LEN,key,hash_transcript)){
+	if (!message_decrypt(t, m1->encrypted_timestamp, NOISE_TIMESTAMP_LEN + NOISE_AUTHTAG_LEN, key, hash_transcript)) {
 		goto out;
 	}
 
@@ -182,10 +178,10 @@ bool handshake_consume_initiation(struct ikpsk2_msg1 *m1, struct noise_peer *pee
 		Update peer
 	*/
 	memcpy(handshake->remote_ephemeral, e, NOISE_PUBLIC_KEY_LEN);
-    memcpy(handshake->remote_static, s, NOISE_PUBLIC_KEY_LEN);
-    memcpy(handshake->latest_timestamp, t, NOISE_TIMESTAMP_LEN);
-    memcpy(handshake->chaining_key, chaining_key, NOISE_HASH_LEN);
-    memcpy(handshake->hash_transcript, hash_transcript, NOISE_HASH_LEN);
+	memcpy(handshake->remote_static, s, NOISE_PUBLIC_KEY_LEN);
+	memcpy(handshake->latest_timestamp, t, NOISE_TIMESTAMP_LEN);
+	memcpy(handshake->chaining_key, chaining_key, NOISE_HASH_LEN);
+	memcpy(handshake->hash_transcript, hash_transcript, NOISE_HASH_LEN);
 
 	handshake->state = HANDSHAKE_CONSUMED_INITIATION;
 	ret = true;
@@ -195,7 +191,7 @@ out:
 	memzero_explicit(hash_transcript, NOISE_HASH_LEN);
 	memzero_explicit(chaining_key, NOISE_HASH_LEN);
 	return ret;
-}	
+}
 
 bool handshake_create_response(struct ikpsk2_msg2 *m2, struct noise_peer *peer)
 {
@@ -209,7 +205,7 @@ bool handshake_create_response(struct ikpsk2_msg2 *m2, struct noise_peer *peer)
 		e: generate ephemerals + C4 & H5
 	*/
 	curve25519_generate_secret(peer->handshake.ephemeral_private);
-	if (!curve25519_generate_public(m2->ephemeral_public_key, peer->handshake.ephemeral_private)){
+	if (!curve25519_generate_public(m2->ephemeral_public_key, peer->handshake.ephemeral_private)) {
 		goto out;
 	}
 
@@ -219,16 +215,14 @@ bool handshake_create_response(struct ikpsk2_msg2 *m2, struct noise_peer *peer)
 		ee : C5
 	*/
 
-	if (!message_ee(peer->handshake.remote_ephemeral, peer->handshake.ephemeral_private,peer->handshake.chaining_key))
-	{
+	if (!message_ee(peer->handshake.remote_ephemeral, peer->handshake.ephemeral_private, peer->handshake.chaining_key)) {
 		goto out;
 	}
 
 	/*
 		se : C6
 	*/
-	if (!message_se(peer->handshake.ephemeral_private, peer->handshake.remote_static,peer->handshake.chaining_key))
-	{
+	if (!message_se(peer->handshake.ephemeral_private, peer->handshake.remote_static, peer->handshake.chaining_key)) {
 		goto out;
 	}
 
@@ -246,7 +240,6 @@ bool handshake_create_response(struct ikpsk2_msg2 *m2, struct noise_peer *peer)
 out:
 	memzero_explicit(key, NOISE_SYMMETRIC_KEY_LEN);
 	return ret;
-
 }
 
 bool handshake_consume_response(struct ikpsk2_msg2 *m2, struct noise_peer *peer)
@@ -272,31 +265,30 @@ bool handshake_consume_response(struct ikpsk2_msg2 *m2, struct noise_peer *peer)
 	/*
 		e : C4 + H5
 	*/
-	message_e(e,m2->ephemeral_public_key, chaining_key, hash_transcript);
+	message_e(e, m2->ephemeral_public_key, chaining_key, hash_transcript);
 	/*
 		ee : C5
 	*/
-	if (!message_ee(e, ephemeral_private, chaining_key)){
+	if (!message_ee(e, ephemeral_private, chaining_key)) {
 		goto out;
 	}
 
 	/*
 		se: C6
 	*/
-	if(!message_se(handshake->static_identity->static_private, e, chaining_key))
-	{
+	if (!message_se(handshake->static_identity->static_private, e, chaining_key)) {
 		goto out;
 	}
 
 	/*
 		psk : C7, pi k3 & H6 + H7
 	*/
-	mix_psk(preshared_key,key,chaining_key,hash_transcript);
+	mix_psk(preshared_key, key, chaining_key, hash_transcript);
 
 	/*
 		decrypt empty + H7
 	*/
-	if (!message_decrypt(empty,m2->encrypted_empty,NOISE_AUTHTAG_LEN,key,hash_transcript)){
+	if (!message_decrypt(empty, m2->encrypted_empty, NOISE_AUTHTAG_LEN, key, hash_transcript)) {
 		goto out;
 	}
 
@@ -326,15 +318,14 @@ out:
 bool begin_session(struct noise_peer *peer)
 {
 	bool ret = false;
-	if (peer->handshake.state != HANDSHAKE_CREATED_RESPONSE && peer->handshake.state != HANDSHAKE_CONSUMED_RESPONSE)
-	{
+
+	if (peer->handshake.state != HANDSHAKE_CREATED_RESPONSE && peer->handshake.state != HANDSHAKE_CONSUMED_RESPONSE) {
 		goto out;
 	}
 	peer->symmetric_keys.i_am_the_initiator = peer->handshake.state == HANDSHAKE_CONSUMED_RESPONSE;
-	if(peer->symmetric_keys.i_am_the_initiator){
+	if (peer->symmetric_keys.i_am_the_initiator) {
 		derive_keys(peer->symmetric_keys.sending_key, peer->symmetric_keys.receiving_key, peer->handshake.chaining_key);
-	}
-	else {
+	} else {
 		derive_keys(peer->symmetric_keys.receiving_key, peer->symmetric_keys.sending_key, peer->handshake.chaining_key);
 	}
 

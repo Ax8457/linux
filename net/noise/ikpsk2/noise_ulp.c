@@ -245,7 +245,7 @@ int noise_ulp_install(struct socket *sock, struct noise_peer *peer)
 	if (!sk)
 		return -ENOTCONN;
 
-	ctx = kzalloc(sizeof(*ctx), GFP_KERNEL);
+	ctx = kzalloc_obj(*ctx, GFP_KERNEL);
 	if (!ctx)
 		return -ENOMEM;
 

@@ -1,0 +1,9 @@
+-------------------------
+net/noise/ikpsk2/cookie.c
+-------------------------
+total: 0 errors, 0 warnings, 0 checks, 60 lines checked
+
+net/noise/ikpsk2/cookie.c has no obvious style problems and is ready for submission.
+----------------------------
+net/noise/ikpsk2/handshake.c
+----------------------------

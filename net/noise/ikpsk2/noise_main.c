@@ -18,23 +18,23 @@ static int __init noise_init(void)
 {
 	int ret;
 
-	printk(KERN_INFO "Custom module loaded with crypto functions ready.\n");
+	pr_info("Custom module loaded with crypto functions ready.\n");
 	ikpsk2_noise_init();
 
 #if IS_ENABLED(CONFIG_NOISE_IKPSK2_SELFTEST)
 	/* NOISE: comment to address */
 	if (!noise_ikpsk2_selftest()) {
-		printk(KERN_ERR "IKpsk2 crypto selftest failed; aborting load.\n");
+		pr_err("IKpsk2 crypto selftest failed; aborting load.\n");
 		return -ENOTRECOVERABLE;
 	}
 	/* NOISE: comment to address */
 	if (!noise_ikpsk2_handshake_selftest()) {
-		printk(KERN_ERR "IKpsk2 handshake selftest failed; aborting load.\n");
+		pr_err("IKpsk2 handshake selftest failed; aborting load.\n");
 		return -ENOTRECOVERABLE;
 	}
 	/* NOISE: comment to address */
 	if (!noise_ikpsk2_kat_selftest()) {
-		printk(KERN_ERR "IKpsk2 KAT selftest failed; aborting load.\n");
+		pr_err("IKpsk2 KAT selftest failed; aborting load.\n");
 		return -ENOTRECOVERABLE;
 	}
 #endif
@@ -42,14 +42,14 @@ static int __init noise_init(void)
 	/* NOISE: comment to address */
 	ret = ikpsk2_keyring_init();
 	if (ret) {
-		printk(KERN_ERR "IKpsk2 keyring init failed (%d).\n", ret);
+		pr_err("IKpsk2 keyring init failed (%d).\n", ret);
 		return ret;
 	}
 
 	/* NOISE: comment to address */
 	noise_ratelimiter_init();
 
-	printk(KERN_INFO "IKpsk2 init ok.\n");
+	pr_info("IKpsk2 init ok.\n");
 	return 0;
 }
 
@@ -57,7 +57,7 @@ static void __exit noise_exit(void)
 {
 	noise_ratelimiter_exit();
 	ikpsk2_keyring_exit();
-	printk(KERN_INFO "Custom module unloaded.\n");
+	pr_info("Custom module unloaded.\n");
 }
 
 module_init(noise_init);
