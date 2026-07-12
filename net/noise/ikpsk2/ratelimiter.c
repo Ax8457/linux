@@ -44,9 +44,9 @@ static DECLARE_DELAYED_WORK(rl_gc_work, rl_gc);
 static u64 rl_key(const struct sockaddr *sa)
 {
 	if (sa->sa_family == AF_INET)
-		return (u64)((const struct sockaddr_in *)sa)->sin_addr.s_addr;
+		return (__force u32)((const struct sockaddr_in *)sa)->sin_addr.s_addr;
 	if (sa->sa_family == AF_INET6)
-		return get_unaligned((const __be64 *)
+		return (__force u64)get_unaligned((const __be64 *)
 			&((const struct sockaddr_in6 *)sa)->sin6_addr);
 	return 0;
 }

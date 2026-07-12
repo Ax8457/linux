@@ -43,8 +43,8 @@
 static const u8 handshake_name[37] __nonstring = "Noise_IKpsk2_25519_ChaChaPoly_BLAKE2s";
 static const u8 identifier_name[14] __nonstring = "Axel Biegalski";
 //Chaining key and Hash transcript
-u8 handshake_init_hash[NOISE_HASH_LEN] __ro_after_init;
-u8 handshake_init_chaining_key[NOISE_HASH_LEN] __ro_after_init;
+static u8 handshake_init_hash[NOISE_HASH_LEN] __ro_after_init;
+static u8 handshake_init_chaining_key[NOISE_HASH_LEN] __ro_after_init;
 
 /*
 	Init function

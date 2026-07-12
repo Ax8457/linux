@@ -43,7 +43,7 @@ struct noise_ulp_ctx {
 
 static inline struct noise_ulp_ctx *noise_ulp_ctx(struct sock *sk)
 {
-	return (struct noise_ulp_ctx *)inet_csk(sk)->icsk_ulp_data;
+	return (__force struct noise_ulp_ctx *)inet_csk(sk)->icsk_ulp_data;
 }
 
 /* Read up to @len ciphertext bytes from the lower (base) socket. */
@@ -257,7 +257,7 @@ int noise_ulp_install(struct socket *sock, struct noise_peer *peer)
 	ctx->prot.close   = noise_ulp_close;
 
 	lock_sock(sk);
-	inet_csk(sk)->icsk_ulp_data = ctx;
+	inet_csk(sk)->icsk_ulp_data = (__force void __rcu *)ctx;
 	smp_store_release(&sk->sk_prot, &ctx->prot);
 	release_sock(sk);
 	return 0;
