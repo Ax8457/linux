@@ -43,8 +43,8 @@
 static const u8 handshake_name[37] __nonstring = "Noise_IKpsk2_25519_ChaChaPoly_BLAKE2s";
 static const u8 identifier_name[14] __nonstring = "Axel Biegalski";
 //Chaining key and Hash transcript
-static u8 handshake_init_hash[NOISE_HASH_LEN] __ro_after_init;
-static u8 handshake_init_chaining_key[NOISE_HASH_LEN] __ro_after_init;
+u8 handshake_init_hash[NOISE_HASH_LEN] __ro_after_init;
+u8 handshake_init_chaining_key[NOISE_HASH_LEN] __ro_after_init;
 
 /*
 	Init function
@@ -297,7 +297,7 @@ void tai64n_now(u8 output[NOISE_TIMESTAMP_LEN])
 //e
 //same function as message1
 //ee
-(const u8 ephemeral_public[NOISE_PUBLIC_KEY_LEN], const u8 ephemeral_private[NOISE_PUBLIC_KEY_LEN], u8 chaining_key[NOISE_HASH_LEN])
+bool __must_check message_ee(const u8 ephemeral_public[NOISE_PUBLIC_KEY_LEN], const u8 ephemeral_private[NOISE_PUBLIC_KEY_LEN], u8 chaining_key[NOISE_HASH_LEN])
 {
 	//C5
 	u8 dh_calculation[NOISE_PUBLIC_KEY_LEN];
@@ -368,6 +368,6 @@ void derive_keys(u8 first_key[NOISE_SYMMETRIC_KEY_LEN], u8 second_key[NOISE_SYMM
 	NOISE_SYMMETRIC_KEY_LEN, NOISE_SYMMETRIC_KEY_LEN,
 	0, 0,
 	chaining_key
-	);
+    );
 }
 
