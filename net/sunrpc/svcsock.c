@@ -548,6 +548,9 @@ static void svc_noise_handshake(struct svc_xprt *xprt)
 
 	/* NOISE: comment to address */
 	if (!noise_ratelimiter_allow((struct sockaddr *)&xprt->xpt_remote)) {
+		/* NOISE: comment to address */
+		pr_warn_ratelimited("noise-dos: rate-limit DROP from %s\n",
+				    xprt->xpt_remotebuf);
 		status = -EBUSY;
 		goto out_close;
 	}
@@ -581,6 +584,8 @@ static void svc_noise_handshake(struct svc_xprt *xprt)
 			goto out_restore;
 		if (!handshake_consume_initiation(&m1, svsk->peer)) {
 			/* NOISE: comment to address */
+			pr_warn_ratelimited("noise-dos: DROP forged/invalid initiation (mac1 or crypto) from %s\n",
+					    xprt->xpt_remotebuf);
 			svc_noise_send_error(sock);
 			status = -EACCES;
 			goto out_restore;
@@ -588,6 +593,9 @@ static void svc_noise_handshake(struct svc_xprt *xprt)
 		/* NOISE: comment to address */
 		if (noise_psk_lookup(svsk->peer->handshake.remote_static,
 				     svsk->peer->handshake.psk)) {
+			/* NOISE: comment to address */
+			pr_warn_ratelimited("noise-dos: DROP unknown client (no PSK) from %s\n",
+					    xprt->xpt_remotebuf);
 			svc_noise_send_error(sock);
 			status = -EACCES;
 			goto out_restore;
@@ -595,6 +603,9 @@ static void svc_noise_handshake(struct svc_xprt *xprt)
 		/* NOISE: comment to address */
 		if (!noise_client_check_ts(svsk->peer->handshake.remote_static,
 					   svsk->peer->handshake.latest_timestamp)) {
+			/* NOISE: comment to address */
+			pr_warn_ratelimited("noise-dos: DROP replay (stale timestamp) from %s\n",
+					    xprt->xpt_remotebuf);
 			svc_noise_send_error(sock);
 			status = -EACCES;
 			goto out_restore;
@@ -602,6 +613,8 @@ static void svc_noise_handshake(struct svc_xprt *xprt)
 		break;
 	default:
 		/* NOISE: comment to address */
+		pr_warn_ratelimited("noise-dos: DROP non-Noise/invalid message from %s\n",
+				    xprt->xpt_remotebuf);
 		status = -EPROTO;
 		goto out_restore;
 	}
