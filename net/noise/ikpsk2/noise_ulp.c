@@ -204,16 +204,11 @@ static int noise_ulp_sendmsg(struct sock *sk, struct msghdr *msg, size_t size)
 	}
 	ret = size;
 
-	/* Rekey: once the keypair crosses a threshold, drop the connection so
-	 * SUNRPC reconnects and re-handshakes (fresh keys). Replaces the old
-	 * RPC-layer rekey trigger.
+	/* NOISE: rekey is driven by the transport layer (a proper
+	 * xprt_force_disconnect after a completed send), not from here: a raw
+	 * half-close of the socket inside the ULP leaves the connection wedged
+	 * in FIN_WAIT and never reconnects.
 	 */
-	/* NOISE: comment to address */
-	if (noise_peer_should_rekey(ctx->peer)) {
-		lock_sock(sk);
-		ctx->base->shutdown(sk, SEND_SHUTDOWN);
-		release_sock(sk);
-	}
 out:
 	kfree(pt);
 	kfree(frame);

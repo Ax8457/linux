@@ -1172,6 +1172,16 @@ static int xs_tcp_send_request(struct rpc_rqst *req)
 			transport->xmit.offset = 0;
 			if (atomic_long_read(&xprt->xmit_queuelen) == 1)
 				tcp_sock_set_cork(transport->inet, false);
+			/* NOISE: this request is fully on the wire (sealed with
+			 * the current keys). If the session keypair has crossed
+			 * its rekey threshold, force a real reconnect so a fresh
+			 * handshake re-keys both ends; SUNRPC then retransmits
+			 * over the new connection. Done here rather than in the
+			 * ULP so it goes through the proper disconnect path.
+			 */
+			if (transport->peer &&
+			    noise_peer_should_rekey(transport->peer))
+				xprt_force_disconnect(xprt);
 			return 0;
 		}
 
