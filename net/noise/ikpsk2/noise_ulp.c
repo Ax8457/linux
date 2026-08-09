@@ -21,6 +21,7 @@
 #include <linux/socket.h>
 #include <linux/uio.h>
 #include <linux/string.h>
+#include <linux/mutex.h>
 #include <linux/unaligned.h>
 #include <net/sock.h>
 #include <net/tcp.h>
@@ -39,6 +40,8 @@ struct noise_ulp_ctx {
 	struct proto		prot;	/* our overridden copy installed on sk */
 	struct noise_peer	*peer;	/* keys/counters; owned by the transport */
 	struct noise_rx		rx;	/* receive reassembly + decrypted buffer */
+	struct mutex		rx_lock;	/* serialises the receive path (ctx->rx) */
+	struct mutex		tx_lock;	/* serialises record sealing + send order */
 };
 
 static inline struct noise_ulp_ctx *noise_ulp_ctx(struct sock *sk)
@@ -120,8 +123,14 @@ static int noise_ulp_recvmsg(struct sock *sk, struct msghdr *msg, size_t len,
 	struct noise_ulp_ctx *ctx = noise_ulp_ctx(sk);
 	struct noise_rx *rx = &ctx->rx;
 	size_t copied = 0;
-	int r;
+	int r, ret;
 
+	/* Serialise the whole receive path: ctx->rx (reassembly buffers) and
+	 * the peer receiving_counter are shared per-socket state and must not
+	 * be touched by two callers at once, or the record stream is corrupted
+	 * (a decrypt failure then tears the connection down).
+	 */
+	mutex_lock(&ctx->rx_lock);
 	while (iov_iter_count(&msg->msg_iter)) {
 		if (rx->pt_pos < rx->pt_len) {
 			size_t n = copy_to_iter(rx->pt + rx->pt_pos,
@@ -140,16 +149,18 @@ static int noise_ulp_recvmsg(struct sock *sk, struct msghdr *msg, size_t len,
 		if (r <= 0) {
 			if (copied)
 				break;
-			if (r == 0)
-				return 0;	/* EOF */
-			/* -EAGAIN: state kept in ctx->rx, caller retries.
-			 * framing/decrypt error: report it; the connection
-			 * will be torn down and re-handshaked.
+			/* r == 0: EOF; r < 0: -EAGAIN (state kept in ctx->rx,
+			 * caller retries) or a framing/decrypt error that tears
+			 * the connection down and re-handshakes.
 			 */
-			return r;
+			ret = r;
+			goto out;
 		}
 	}
-	return copied;
+	ret = copied;
+out:
+	mutex_unlock(&ctx->rx_lock);
+	return ret;
 }
 
 /* proto->sendmsg: seal the plaintext byte stream in chunks, write to TCP. */
@@ -164,21 +175,26 @@ static int noise_ulp_sendmsg(struct sock *sk, struct msghdr *msg, size_t size)
 	frame = kmalloc(NOISE_ULP_MAX_PT + NOISE_REC_OVERHEAD, GFP_KERNEL);
 	if (!pt || !frame) {
 		ret = -ENOMEM;
-		goto out;
+		goto out_free;
 	}
 
+	/* Serialise sealing and sending: each record's counter must reach the
+	 * wire in the same order it was assigned, so two concurrent senders on
+	 * this socket must not interleave their records.
+	 */
+	mutex_lock(&ctx->tx_lock);
 	while (left) {
 		size_t chunk = min_t(size_t, left, NOISE_ULP_MAX_PT);
 		int wirelen, sent = 0;
 
 		if (copy_from_iter(pt, chunk, &msg->msg_iter) != chunk) {
 			ret = -EFAULT;
-			goto out;
+			goto out_unlock;
 		}
 		wirelen = noise_record_seal(ctx->peer, frame, pt, chunk);
 		if (wirelen < 0) {
 			ret = wirelen;
-			goto out;
+			goto out_unlock;
 		}
 		/* Blocking, all-or-nothing send of one sealed record. A failure
 		 * here means the connection is broken: report the error so RPC
@@ -196,7 +212,7 @@ static int noise_ulp_sendmsg(struct sock *sk, struct msghdr *msg, size_t size)
 			n = ctx->base->sendmsg(sk, &sm, wirelen - sent);
 			if (n <= 0) {
 				ret = n ? n : -EPIPE;
-				goto out;
+				goto out_unlock;
 			}
 			sent += n;
 		}
@@ -209,7 +225,9 @@ static int noise_ulp_sendmsg(struct sock *sk, struct msghdr *msg, size_t size)
 	 * half-close of the socket inside the ULP leaves the connection wedged
 	 * in FIN_WAIT and never reconnects.
 	 */
-out:
+out_unlock:
+	mutex_unlock(&ctx->tx_lock);
+out_free:
 	kfree(pt);
 	kfree(frame);
 	return ret;
@@ -224,6 +242,8 @@ static void noise_ulp_close(struct sock *sk, long timeout)
 	WRITE_ONCE(sk->sk_prot, base);
 	inet_csk(sk)->icsk_ulp_data = NULL;
 	noise_rx_reset(&ctx->rx);
+	mutex_destroy(&ctx->rx_lock);
+	mutex_destroy(&ctx->tx_lock);
 	kfree(ctx);
 	base->close(sk, timeout);
 }
@@ -249,6 +269,8 @@ int noise_ulp_install(struct socket *sock, struct noise_peer *peer)
 		return -ENOMEM;
 
 	ctx->peer = peer;
+	mutex_init(&ctx->rx_lock);
+	mutex_init(&ctx->tx_lock);
 	ctx->base = sk->sk_prot;
 	ctx->prot = *sk->sk_prot;	/* inherit everything from TCP ... */
 	ctx->prot.sendmsg = noise_ulp_sendmsg;	/* ... override the data path */

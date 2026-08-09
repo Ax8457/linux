@@ -62,7 +62,7 @@ enum transport_limits {
  */
 enum rekey_limits {
 	REKEY_AFTER_MESSAGES = 1ULL << 60,
-	REKEY_AFTER_TIME = 360,	/* seconds (1 hour) */
+	REKEY_AFTER_TIME = 3600,	/* seconds (1 hour) */
 };
 
 /* NOISE: comment to address */
